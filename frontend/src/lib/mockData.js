@@ -18,9 +18,12 @@ export const DEMO_CLIPS = [
     duration_seconds: 38,
     viral_score: 96,
     caption_style: "Bold-Yellow",
-    is_exported: false,
+    is_exported: true,
     thumbnail_color: "#CCFF00",
     transcript_preview: "What if I told you that the single biggest mistake creators make...",
+    source_video: "founders-lab-ep142.mp4",
+    platforms: ["TikTok", "Shorts", "Reels"],
+    performance: { views: 1248000, likes: 96400, shares: 12800, comments: 3140, ctr: 11.4 },
     created_at: new Date(Date.now() - 0 * 86400000).toISOString(),
   },
   {
@@ -33,6 +36,9 @@ export const DEMO_CLIPS = [
     is_exported: true,
     thumbnail_color: "#CCFF00",
     transcript_preview: "If your hook doesn't slap, your video is dead on arrival.",
+    source_video: "founders-lab-ep142.mp4",
+    platforms: ["TikTok", "Reels"],
+    performance: { views: 412000, likes: 31200, shares: 4100, comments: 980, ctr: 8.7 },
     created_at: new Date(Date.now() - 1 * 86400000).toISOString(),
   },
   {
@@ -45,7 +51,99 @@ export const DEMO_CLIPS = [
     is_exported: false,
     thumbnail_color: "#CCFF00",
     transcript_preview: "Pattern two: use motion in the first frame, never a static shot.",
+    source_video: "riya-stream-mar-08.mov",
+    platforms: ["Shorts", "Reels"],
+    performance: { views: 0, likes: 0, shares: 0, comments: 0, ctr: 0 },
     created_at: new Date(Date.now() - 2 * 86400000).toISOString(),
+  },
+  {
+    id: "demo-clip-4",
+    user_id: "demo-user",
+    title: "Why your podcast clips aren't going viral",
+    duration_seconds: 48,
+    viral_score: 91,
+    caption_style: "Minimal",
+    is_exported: true,
+    thumbnail_color: "#CCFF00",
+    transcript_preview: "Spoiler: it's not the audio. It's the first 1.5 seconds.",
+    source_video: "founders-lab-ep142.mp4",
+    platforms: ["TikTok", "Reels"],
+    performance: { views: 287000, likes: 19400, shares: 2200, comments: 612, ctr: 9.2 },
+    created_at: new Date(Date.now() - 4 * 86400000).toISOString(),
+  },
+  {
+    id: "demo-clip-5",
+    user_id: "demo-user",
+    title: "Streamers, you're leaving views on the table",
+    duration_seconds: 41,
+    viral_score: 84,
+    caption_style: "Beast",
+    is_exported: false,
+    thumbnail_color: "#CCFF00",
+    transcript_preview: "Every VOD has 8–12 viral moments. Most of them die in your archive.",
+    source_video: "riya-stream-mar-08.mov",
+    platforms: ["TikTok", "Shorts"],
+    performance: { views: 0, likes: 0, shares: 0, comments: 0, ctr: 0 },
+    created_at: new Date(Date.now() - 6 * 86400000).toISOString(),
+  },
+  {
+    id: "demo-clip-6",
+    user_id: "demo-user",
+    title: "Stop posting until you watch this",
+    duration_seconds: 43,
+    viral_score: 79,
+    caption_style: "Cinema",
+    is_exported: true,
+    thumbnail_color: "#CCFF00",
+    transcript_preview: "The biggest mistake creators make in 2026? Treating short-form like shrunken long-form.",
+    source_video: "deep-dive-creator-econ.mp4",
+    platforms: ["Reels", "TikTok", "Shorts"],
+    performance: { views: 178000, likes: 9800, shares: 1340, comments: 410, ctr: 7.1 },
+    created_at: new Date(Date.now() - 9 * 86400000).toISOString(),
+  },
+];
+
+export const DEMO_RECENT_UPLOADS = [
+  {
+    id: "upl-1",
+    filename: "founders-lab-ep142.mp4",
+    source_label: "Podcast · Episode 142",
+    duration_minutes: 74,
+    size_mb: 412,
+    clips_generated: 8,
+    status: "ready",
+    processed_at: new Date(Date.now() - 1 * 3600 * 1000).toISOString(),
+  },
+  {
+    id: "upl-2",
+    filename: "riya-stream-mar-08.mov",
+    source_label: "Twitch VOD · 8 Mar",
+    duration_minutes: 218,
+    size_mb: 1840,
+    clips_generated: 14,
+    status: "ready",
+    processed_at: new Date(Date.now() - 26 * 3600 * 1000).toISOString(),
+  },
+  {
+    id: "upl-3",
+    filename: "youtube-creator-econ.mp4",
+    source_label: "YouTube · Deep dive",
+    duration_minutes: 42,
+    size_mb: 256,
+    clips_generated: 6,
+    status: "processing",
+    progress: 64,
+    processed_at: null,
+  },
+  {
+    id: "upl-4",
+    filename: "marcus-keynote-disrupt.mp4",
+    source_label: "Conference · Disrupt 2026",
+    duration_minutes: 31,
+    size_mb: 198,
+    clips_generated: 5,
+    status: "ready",
+    processed_at: new Date(Date.now() - 5 * 86400 * 1000).toISOString(),
   },
 ];
 
@@ -158,4 +256,25 @@ export function formatTimestamp(seconds) {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+export function formatViews(n) {
+  if (!n) return "—";
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, "") + "K";
+  return String(n);
+}
+
+export function formatRelative(iso) {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  const diff = Date.now() - t;
+  const mins = Math.round(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
 }
