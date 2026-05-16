@@ -11,10 +11,10 @@ export default function Footer() {
             <div className="w-8 h-8 rounded-md bg-volt flex items-center justify-center">
               <Sparkles className="w-4 h-4 text-black" strokeWidth={2.5} />
             </div>
-            <span className="font-heading font-semibold text-lg">ClipForge<span className="text-volt">.</span></span>
+            <span className="font-heading font-semibold text-lg">Hookify<span className="text-volt">.</span></span>
           </Link>
           <p className="mt-5 text-sm text-zinc-500 max-w-sm leading-relaxed">
-            The AI clipping studio for serious creators. Turn long-form podcasts, streams and uploads into scroll-stopping shorts in minutes.
+            Hookify AI — Turn long-form content into viral short-form clips in seconds. Built for podcasters, streamers and creators who hate scrubbing timelines.
           </p>
           <div className="mt-6 flex items-center gap-3">
             <a href="#" className="w-9 h-9 rounded-md border border-white/5 flex items-center justify-center text-zinc-400 hover:text-volt hover:border-volt/40 transition-colors" data-testid="footer-twitter"><Twitter className="w-4 h-4" /></a>
@@ -52,7 +52,7 @@ export default function Footer() {
       </div>
       <div className="border-t border-white/5">
         <div className="mx-auto max-w-7xl px-6 lg:px-10 py-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-zinc-600">
-          <div>© 2026 ClipForge AI, Inc. All rights reserved.</div>
+          <div>© 2026 Hookify AI, Inc. All rights reserved.</div>
           <div>Made for creators who hate editing.</div>
         </div>
       </div>

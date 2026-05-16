@@ -31,7 +31,7 @@ export default function Navbar({ variant = "marketing" }) {
           <div className="w-8 h-8 rounded-md bg-volt flex items-center justify-center group-hover:rotate-12 transition-transform">
             <Sparkles className="w-4 h-4 text-black" strokeWidth={2.5} />
           </div>
-          <span className="font-heading font-semibold text-lg tracking-tight">ClipForge<span className="text-volt">.</span></span>
+          <span className="font-heading font-semibold text-lg tracking-tight">Hookify<span className="text-volt">.</span></span>
         </Link>
 
         <nav className="hidden md:flex items-center gap-8">

@@ -17,7 +17,7 @@ export default function DashboardLayout({ children }) {
       <aside className="border-r border-white/5 bg-ink-900/40 hidden lg:flex flex-col">
         <Link to="/" className="flex items-center gap-2 px-6 py-5 border-b border-white/5">
           <div className="w-8 h-8 rounded-md bg-volt flex items-center justify-center"><Sparkles className="w-4 h-4 text-black" strokeWidth={2.5} /></div>
-          <span className="font-heading font-semibold text-lg">ClipForge<span className="text-volt">.</span></span>
+          <span className="font-heading font-semibold text-lg">Hookify<span className="text-volt">.</span></span>
         </Link>
         <nav className="flex-1 p-4 space-y-1">
           {NAV.map((n) => {

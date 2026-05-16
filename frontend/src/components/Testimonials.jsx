@@ -3,13 +3,13 @@ import { Star } from "lucide-react";
 
 const TESTIMONIALS = [
   {
-    quote: "We were paying two editors $6k/month to chop our podcast. Cancelled both, ClipForge does it better. Our Reels reach doubled in 6 weeks.",
+    quote: "We were paying two editors $6k/month to chop our podcast. Cancelled both, Hookify does it better. Our Reels reach doubled in 6 weeks.",
     name: "Marcus Halloway",
     role: "Host · The Founders Lab Podcast",
     img: "https://images.unsplash.com/photo-1559523161-0fc0d8b38a7a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDB8MHwxfHNlYXJjaHwzfHxwb2RjYXN0ZXIlMjBtaWNyb3Bob25lfGVufDB8fHx8MTc3ODkxNjgwMnww&ixlib=rb-4.1.0&q=85",
   },
   {
-    quote: "I stream 30 hours a week. ClipForge surfaces the moments I forgot happened — and the viral scores are genuinely predictive.",
+    quote: "I stream 30 hours a week. Hookify surfaces the moments I forgot happened — and the viral scores are genuinely predictive.",
     name: "Riya Anand",
     role: "Twitch Partner · @riyaplays",
     img: "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDB8MHwxfHNlYXJjaHwyfHxwb2RjYXN0ZXIlMjBtaWNyb3Bob25lfGVufDB8fHx8MTc3ODkxNjgwMnww&ixlib=rb-4.1.0&q=85",

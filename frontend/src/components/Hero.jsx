@@ -26,7 +26,7 @@ export default function Hero() {
           </h1>
 
           <p className="mt-7 text-base sm:text-lg text-zinc-400 max-w-xl leading-relaxed" data-testid="hero-subtitle">
-            ClipForge AI watches your podcasts, streams and long-form uploads, finds the moments that actually pop, and exports caption-baked vertical clips ready for TikTok, Shorts and Reels. No editor required.
+            Hookify AI — Turn long-form content into viral short-form clips in seconds. We watch your podcasts, streams and uploads, find the moments that pop, and export caption-baked vertical clips ready for TikTok, Shorts and Reels. No editor required.
           </p>
 
           <div className="mt-9 flex flex-wrap items-center gap-4">

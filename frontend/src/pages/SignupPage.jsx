@@ -45,7 +45,7 @@ export default function SignupPage() {
         <div className="absolute inset-0 dot-grid opacity-30" />
         <Link to="/" className="relative flex items-center gap-2 w-fit">
           <div className="w-8 h-8 rounded-md bg-volt flex items-center justify-center"><Sparkles className="w-4 h-4 text-black" strokeWidth={2.5} /></div>
-          <span className="font-heading font-semibold text-lg">ClipForge<span className="text-volt">.</span></span>
+          <span className="font-heading font-semibold text-lg">Hookify<span className="text-volt">.</span></span>
         </Link>
         <div className="relative max-w-md space-y-6">
           <h2 className="font-heading text-2xl font-medium leading-snug">Start free. 5 clips on us.</h2>

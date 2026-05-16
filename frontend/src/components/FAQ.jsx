@@ -2,9 +2,9 @@ import React from "react";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "./ui/accordion";
 
 const FAQS = [
-  { q: "How long does it take to process a 1-hour podcast?", a: "Most 60-minute uploads finish in 3–5 minutes on the Creator plan. Studio plan users get a priority queue that typically returns clips in under 90 seconds." },
+  { q: "How long does it take Hookify to process a 1-hour podcast?", a: "Most 60-minute uploads finish in 3–5 minutes on the Creator plan. Studio plan users get a priority queue that typically returns clips in under 90 seconds." },
   { q: "Will my brand kit (fonts, colours, logo) survive the export?", a: "Yes. Save up to 3 brand presets on Creator and unlimited on Studio. Captions, lower-thirds and logo bugs are applied frame-accurately." },
-  { q: "Do I own the clips ClipForge generates?", a: "100%. You retain full commercial rights to every clip, transcript and asset. We never train models on your private uploads." },
+  { q: "Do I own the clips Hookify generates?", a: "100%. You retain full commercial rights to every clip, transcript and asset. We never train models on your private uploads." },
   { q: "What if the AI picks the wrong moment?", a: "You can re-roll any suggestion, adjust start/end frames by 1/30s, regenerate captions and try a different hook in two clicks." },
   { q: "Can I cancel anytime?", a: "Yes. Plans are month-to-month. We'll keep your clips, brand kits and history available for 90 days after cancellation." },
   { q: "Do you support YouTube URLs and live streams?", a: "Drop a YouTube, Twitch VOD, Vimeo or Dropbox link and we'll ingest directly. Native upload supports MP4, MOV, MKV up to 8 hours." },

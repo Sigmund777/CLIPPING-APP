@@ -13,7 +13,7 @@ export default function Features() {
             <h2 className="font-heading text-3xl sm:text-4xl lg:text-5xl font-medium tracking-tight">A clipping workflow that thinks like an editor.</h2>
           </div>
           <p className="text-sm text-zinc-400 max-w-sm">
-            Not another auto-chopper. ClipForge is built on context — it understands stories, beats, and what makes a viewer stop scrolling.
+            Not another auto-chopper. Hookify is built on context — it understands stories, beats, and what makes a viewer stop scrolling.
           </p>
         </div>
 
