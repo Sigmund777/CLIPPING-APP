@@ -1,0 +1,90 @@
+{
+  "theme": "DARK",
+  "archetype": "4 - Swiss & High-Contrast",
+  "brand": {
+    "name": "ClipForge AI",
+    "description": "AI-powered long-form to short-form video clipping tool for creators"
+  },
+  "colors": {
+    "background": "#09090B",
+    "surface": "#18181B",
+    "surface_glass": "rgba(24, 24, 27, 0.7)",
+    "border": "#27272A",
+    "text_primary": "#FAFAFA",
+    "text_secondary": "#A1A1AA",
+    "accent_primary": "#CCFF00",
+    "accent_primary_text": "#000000"
+  },
+  "typography": {
+    "heading_font": "Outfit",
+    "body_font": "Manrope",
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl font-medium tracking-tight leading-tight",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl font-medium tracking-tight",
+      "h3": "text-xl sm:text-2xl font-medium",
+      "h4": "text-lg sm:text-xl font-medium",
+      "body": "text-base leading-relaxed text-zinc-400",
+      "overline": "text-xs font-bold uppercase tracking-[0.2em] text-zinc-500"
+    }
+  },
+  "layout": {
+    "marketing_page": "Bento Grid (Asymmetric, wide gaps, generous padding p-12 to p-24)",
+    "dashboard": "Control Room Grid (Dense, functional, gap-4 to gap-6, h-full items)",
+    "surface_styles": {
+      "header": "Crystal Glass (backdrop-blur-xl bg-zinc-950/60 border-b border-white/5)",
+      "bento_cards": "Flat background (bg-zinc-900), 1px subtle border (border-white/5), no shadow. Hover: border-zinc-700/50",
+      "dashboard_cards": "Grid Borders (Technical look, border-collapse styles or right/bottom subtle borders)"
+    }
+  },
+  "animations": {
+    "library": "framer-motion",
+    "scroll": "lenis",
+    "hover": "hover:bg-zinc-800 transition-colors duration-200"
+  },
+  "components_strategy": {
+    "marketing_page": "Pure HTML/Tailwind for layouts, heavy customization. Overlapping elements. Use react-fast-marquee for logos.",
+    "dashboard": "Shadcn UI (Tables, Dialogs, Select, Tabs). Flat design, minimal radius (rounded-lg).",
+    "buttons": "Primary CTA must use Accent Primary (#CCFF00) with Black text. Minimal border radius (rounded-md)."
+  },
+  "media": {
+    "hero_background": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/125d395e-5f31-405e-a930-761de29c625f/images/a4d8d1aebf84e409a66aade962912ad10e28a226f6226ecc9d1112c6d5eb9c67.png",
+      "description": "Abstract 3D glass shards glowing with neon yellow on deep obsidian black"
+    },
+    "bento_preview": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/125d395e-5f31-405e-a930-761de29c625f/images/0d83e133163afc420c1be19373c8808d79739edfc9638e6a73ff8ddc93ba96aa.png",
+      "description": "Smartphone displaying a glowing audio waveform for vertical 9:16 preview"
+    },
+    "testimonials": [
+      {
+        "url": "https://images.unsplash.com/photo-1559523161-0fc0d8b38a7a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDB8MHwxfHNlYXJjaHwzfHxwb2RjYXN0ZXIlMjBtaWNyb3Bob25lfGVufDB8fHx8MTc3ODkxNjgwMnww&ixlib=rb-4.1.0&q=85",
+        "description": "Podcaster in studio"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDB8MHwxfHNlYXJjaHwyfHxwb2RjYXN0ZXIlMjBtaWNyb3Bob25lfGVufDB8fHx8MTc3ODkxNjgwMnww&ixlib=rb-4.1.0&q=85",
+        "description": "Podcaster Microphone"
+      }
+    ],
+    "logos": [
+      {
+        "url": "https://images.unsplash.com/photo-1764344815160-0e2afc6939a0?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODh8MHwxfHNlYXJjaHwyfHxjb21wYW55JTIwbG9nbyUyMHdoaXRlJTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3Nzg4NjY1MjZ8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Sponsor Logo 1"
+      },
+      {
+        "url": "https://images.pexels.com/photos/9973170/pexels-photo-9973170.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Sponsor Logo 2"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Strictly use the 'media' object URLs for all images. Do not use generic placeholders.",
+    "Implement the UI exclusively in Dark Mode (#09090B base). Do not use pure black.",
+    "Use 'Outfit' for headers and 'Manrope' for body. Import them properly in the main css or HTML layout.",
+    "The primary action buttons (Export, Upload) must use #CCFF00 (Volt Yellow) with black text. Keep border-radius minimal (rounded-md).",
+    "For the Landing Page, use generous spacing (p-16 to p-24) and implement a Bento Grid for the feature showcase.",
+    "For the Dashboard, use a dense Control Room Grid. The Video Preview must be locked in a 9:16 aspect ratio.",
+    "Add 'data-testid' attributes to all interactive elements (buttons, inputs, links) to facilitate testing.",
+    "Generate realistic copywriting for all features and marketing text. Never use lorem ipsum.",
+    "Use lucide-react for all icons."
+  ]
+}
