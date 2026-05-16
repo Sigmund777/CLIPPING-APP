@@ -68,13 +68,13 @@ export default function Navbar({ variant = "marketing" }) {
           ))}
           {user ? (
             <>
-              <Link to="/dashboard" className="block text-sm" data-testid="mnav-dashboard">Dashboard</Link>
-              <button onClick={async () => { await logout(); nav("/"); }} className="block text-sm text-zinc-400" data-testid="mnav-logout">Log out</button>
+              <Link to="/dashboard" onClick={() => setOpen(false)} className="block text-sm" data-testid="mnav-dashboard">Dashboard</Link>
+              <button onClick={async () => { setOpen(false); await logout(); nav("/"); }} className="block text-sm text-zinc-400" data-testid="mnav-logout">Log out</button>
             </>
           ) : (
             <>
-              <Link to="/login" className="block text-sm" data-testid="mnav-login">Log in</Link>
-              <Link to="/signup" className="block bg-volt text-black text-sm font-medium px-4 py-2 rounded-md w-fit" data-testid="mnav-signup">Start free</Link>
+              <Link to="/login" onClick={() => setOpen(false)} className="block text-sm" data-testid="mnav-login">Log in</Link>
+              <Link to="/signup" onClick={() => setOpen(false)} className="block bg-volt text-black text-sm font-medium px-4 py-2 rounded-md w-fit" data-testid="mnav-signup">Start free</Link>
             </>
           )}
         </div>
