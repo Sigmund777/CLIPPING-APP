@@ -83,3 +83,79 @@ export const DEMO_SUGGESTIONS = {
 export function getDemoClipById(id) {
   return DEMO_CLIPS.find((c) => c.id === id) || DEMO_CLIPS[0];
 }
+
+// Demo "generated clips" returned by the AI pipeline after upload analysis.
+// Richer shape than DEMO_CLIPS — includes hook copy, platform fit, confidence, timestamps.
+export const DEMO_GENERATED_CLIPS = [
+  {
+    id: "gen-1",
+    start_seconds: 142,
+    end_seconds: 188,
+    duration_seconds: 46,
+    title: "The 3-second hook rule nobody is teaching",
+    hook: "If your first frame is static, you've already lost the algorithm.",
+    transcript_preview: "If your hook doesn't slap, your video is dead on arrival. Algorithms reward emotional density…",
+    platforms: ["TikTok", "Shorts", "Reels"],
+    confidence: 96,
+    reason: "Pattern-interrupt opener · high emotional density · self-contained payoff",
+    thumbnail_color: "#CCFF00",
+  },
+  {
+    id: "gen-2",
+    start_seconds: 514,
+    end_seconds: 562,
+    duration_seconds: 48,
+    title: "Why your podcast clips aren't going viral (yet)",
+    hook: "Spoiler: it's not the audio. It's the first 1.5 seconds.",
+    transcript_preview: "Most creators chop highlights at the wrong beat. The viral cut starts on the inhale, not the punchline…",
+    platforms: ["TikTok", "Reels"],
+    confidence: 91,
+    reason: "Curiosity gap · contrarian framing · save-worthy tactical advice",
+    thumbnail_color: "#CCFF00",
+  },
+  {
+    id: "gen-3",
+    start_seconds: 938,
+    end_seconds: 992,
+    duration_seconds: 54,
+    title: "Three editing patterns that broke a million views",
+    hook: "Pattern one alone added 4.2M views in 12 hours.",
+    transcript_preview: "Pattern one: contradiction. Pattern two: motion in the first frame. Pattern three: question loop close…",
+    platforms: ["Shorts", "Reels"],
+    confidence: 88,
+    reason: "Clear value list · numbered structure · strong retention curve",
+    thumbnail_color: "#CCFF00",
+  },
+  {
+    id: "gen-4",
+    start_seconds: 1387,
+    end_seconds: 1428,
+    duration_seconds: 41,
+    title: "Streamers, you're leaving views on the table",
+    hook: "Every VOD has 8–12 viral moments. Most of them die in your archive.",
+    transcript_preview: "I stream 30 hours a week. There's gold in those clips — but only if you cut them at the contradiction…",
+    platforms: ["TikTok", "Shorts"],
+    confidence: 84,
+    reason: "Direct call-out to audience · specific quant claim · loop-friendly close",
+    thumbnail_color: "#CCFF00",
+  },
+  {
+    id: "gen-5",
+    start_seconds: 1812,
+    end_seconds: 1855,
+    duration_seconds: 43,
+    title: "Stop posting until you watch this",
+    hook: "The biggest mistake creators make in 2026? Treating short-form like shrunken long-form.",
+    transcript_preview: "Short-form isn't a clip — it's a self-contained story with a hook, payoff and loop. Treat it like one…",
+    platforms: ["Reels", "TikTok", "Shorts"],
+    confidence: 79,
+    reason: "Bold contrarian opener · educational hook · multi-platform safe",
+    thumbnail_color: "#CCFF00",
+  },
+];
+
+export function formatTimestamp(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
