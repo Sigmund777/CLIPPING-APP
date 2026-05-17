@@ -31,13 +31,15 @@ export default function JoinBetaDialog({ trigger }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [type, setType] = useState("");
+  const [platform, setPlatform] = useState("");
+  const [volume, setVolume] = useState("");
   const [pain, setPain] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");
 
   const reset = () => {
-    setName(""); setEmail(""); setType(""); setPain("");
+    setName(""); setEmail(""); setType(""); setPlatform(""); setVolume(""); setPain("");
     setSubmitting(false); setSubmitted(false); setError("");
   };
 
@@ -61,7 +63,7 @@ export default function JoinBetaDialog({ trigger }) {
 
     // Persist locally so the demo can showcase "you're on the list" on repeat visits.
     try {
-      const payload = { name, email, type, pain, submitted_at: new Date().toISOString() };
+      const payload = { name, email, type, platform, volume, pain, submitted_at: new Date().toISOString() };
       const existing = JSON.parse(localStorage.getItem("hookify_beta_signups") || "[]");
       localStorage.setItem("hookify_beta_signups", JSON.stringify([...existing, payload]));
     } catch (_) {}

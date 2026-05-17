@@ -364,16 +364,37 @@ export default function ClipEditorPage() {
             <div className="bg-ink-900 border border-white/5 rounded-lg p-5">
               <div className="text-xs font-bold uppercase tracking-[0.2em] text-volt mb-3">More viral moments</div>
               <div className="space-y-2.5">
-                {suggestions?.clips?.slice(0, 3).map((c, i) => (
-                  <div key={i} className="p-3 rounded-md bg-ink-950 border border-white/5 hover:border-volt/30 transition-colors cursor-pointer" data-testid={`suggestion-${i}`}>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <div className="font-mono text-[10px] text-zinc-500">{c.start.toFixed(0)}s – {c.end.toFixed(0)}s</div>
-                      <div className="font-mono text-[10px] text-volt">{c.score}/100</div>
+                {suggestions?.clips?.slice(0, 3).map((c, i) => {
+                  const start = typeof c.start_seconds === "number" ? c.start_seconds : (c.start || 0);
+                  const end = typeof c.end_seconds === "number" ? c.end_seconds : (c.end || 0);
+                  const label = c.platform || c.caption_style || `${Math.max(0, Math.round(end - start))}s`;
+                  return (
+                    <div
+                      key={c.id || i}
+                      className="p-3 rounded-md bg-ink-950 border border-white/5 hover:border-volt/30 transition-colors cursor-pointer"
+                      data-testid={`suggestion-${i}`}
+                      onClick={() => {
+                        setActiveClip({
+                          ...c,
+                          start_seconds: start,
+                          end_seconds: end,
+                          duration_seconds: c.duration_seconds || Math.max(0, Math.round(end - start)),
+                          source_filename: activeClip?.source_filename || clip?.source_video || "demo-source.mp4",
+                          mode: activeClip?.mode || "demo",
+                        });
+                        toast("Loaded into editor", { description: c.title });
+                        nav(`/clip/${c.id || `gen-${i}`}`);
+                      }}
+                    >
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="font-mono text-[10px] text-zinc-500">{Math.round(start)}s – {Math.round(end)}s</div>
+                        <div className="font-mono text-[10px] text-volt">{label}</div>
+                      </div>
+                      <div className="text-xs font-medium leading-snug">{c.title}</div>
+                      {c.reason && <div className="text-[11px] text-zinc-500 mt-1">{c.reason}</div>}
                     </div>
-                    <div className="text-xs font-medium leading-snug">{c.title}</div>
-                    <div className="text-[11px] text-zinc-500 mt-1">{c.reason}</div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>

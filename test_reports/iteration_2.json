@@ -1,0 +1,33 @@
+{
+  "summary": "Frontend-only E2E test for Hookify AI beta build. All critical flows pass: landing page renders all sections (Hero, How it works, Features, Testimonials, Pricing, FAQ, Footer), Join Beta dialog submits successfully and persists to localStorage['hookify_beta_signups'] (all 6 fields including new platform+volume work), Watch Demo dialog opens with no runtime errors, all 7 protected routes (/dashboard, /upload, /workspace, /templates, /settings, /beta-requests, /clip/xyz) correctly redirect to /login when unauthenticated, login with creator@clipforge.ai/Creator2026! lands on /dashboard, sidebar shows all 6 nav items (Studio, Upload, Workspace, Templates, Settings, Beta), Templates page renders 6 cards and 'Use template' activates + 'Clear' wipes localStorage['hookify_active_template'], Dashboard 'active-template-chip' visible, Settings save persists hookify_settings, Settings Reset (data-testid=settings-reset) correctly restores defaults (creator_name reset to 'Maya Reyes'), Editor opens from idea-open-gen-1 with edit-title/edit-hook/edit-caption/edit-platform/edit-status fields, Save Clip persists hookify_saved_clips, 'More viral moments' suggestion-0 click loads suggestion WITHOUT the previous c.start.toFixed crash, Workspace shows saved clips with platform+status filters, status select updates, delete removes clip and shows workspace-empty state, Beta Requests page renders submitted entries, side-logout clears demo session. ZERO uncaught runtime errors (page errors = 0). Expected 401s on /api/auth/me, /api/clips/:id, /api/ai/transcript, /api/ai/suggestions handled gracefully.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "WatchDemoDialog", "issues": ["Radix accessibility warning: 'DialogContent requires a DialogTitle'. The dialog opens fine but Radix logs a console error every time. Wrap a hidden DialogTitle with VisuallyHidden, or supply DialogTitle inside DialogContent. Non-blocking but pollutes the console."]},
+      {"screen": "WorkspacePage native <select>", "issues": ["React dev-mode hydration warning: '<span> cannot be a child of <option>' originates from emergent's static-analysis x-* attribute injector wrapping the {s} text in <option> with a <span style=display:contents>. Not a user-authored bug; it disappears in production builds. No functional impact."]}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_2.json"],
+  "action_items": [
+    "OPTIONAL: Add a hidden DialogTitle to WatchDemoDialog (or wrap with @radix-ui VisuallyHidden) to silence the Radix a11y warning in console.",
+    "OPTIONAL: settings-reset uses window.confirm — works in real usage but blocks E2E unless test auto-accepts dialog. Consider switching to an in-app confirm modal for better UX + testability.",
+    "OPTIONAL: nav-logout selector was not observable in this run because the navbar (landing-page) is replaced by DashboardLayout's sidebar on authed pages; visiting / while logged in still showed login/signup buttons in this session — may want to verify nav-logout actually appears in Navbar.jsx for authed users on public routes if that's the intended design."
+  ],
+  "critical_code_review_comments": [
+    "JoinBetaDialog uses native <select> (correct for simple dropdowns; less code than shadcn Select). Validation only requires name/email/type/pain — platform and volume are optional. That's fine but mention in placeholder.",
+    "Settings handleReset relies on window.confirm — fine but not great for mobile/desktop consistency; consider a custom confirm dialog.",
+    "Templates handleUse navigates to /upload after 700ms toast — user may not see the 'Active' state on the templates page unless they navigate back. Working as designed.",
+    "ClipEditorPage 'More viral moments' fix verified — clicking suggestion-0 no longer throws TypeError on c.start.toFixed; safe coercion is in place.",
+    "Protected route guards work consistently across all 7 paths. AuthProvider's local-demo fallback engages correctly when /api/auth/me returns 401."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100% of requested flows"},
+  "test_credentials": "creator@clipforge.ai / Creator2026! (works — either via backend or via local demo fallback; in our run backend login succeeded and routed to /dashboard)",
+  "seed_data_creation": "Created localStorage entries: hookify_beta_signups (1 TEST Creator signup), hookify_saved_clips (1 TEST Clip Saved — later deleted via workspace), hookify_settings (saved then reset to default Maya Reyes). hookify_active_template was set then cleared. All test data is browser-scoped and self-cleaned by the workflow.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All Hookify localStorage helpers (loadSavedClips/saveClip/deleteSavedClip/loadBetaRequests/loadSettings/saveSettings/setActiveTemplate/clearActiveTemplate) work correctly. JoinBetaDialog uses NATIVE <select> elements — use page.select_option, not Radix [role=option] selectors. Settings reset uses window.confirm — auto-accept dialogs in Playwright via page.on('dialog', lambda d: d.accept()). TemplatesPage navigates to /upload 700ms after 'Use template' click — to verify active-template-pill you must navigate back to /templates after activation.",
+  "rca of the issue": "No bugs found. The 3 specific regressions called out by the main agent (JoinBetaDialog missing platform/volume state; ClipEditor c.start.toFixed crash; missing Reset/Clear/Workspace/Beta sidebar entries) are all fixed and verified working end-to-end. App is ready to push to GitHub w.r.t. frontend runtime stability."
+}
