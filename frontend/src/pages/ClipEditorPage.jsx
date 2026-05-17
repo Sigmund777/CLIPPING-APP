@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import {
   ArrowLeft, Download, Play, Pause, Wand2, RefreshCw, Type,
   Zap, MessageSquare, Clock, FileVideo, Lightbulb, Sparkles, Save,
+  Film, Loader2, CheckCircle2, AlertCircle,
 } from "lucide-react";
 
 const CAPTION_STYLES = ["Bold-Yellow", "Subtitled", "Karaoke", "Minimal", "Big Mood", "Beast", "Cinema"];
@@ -59,6 +60,11 @@ export default function ClipEditorPage() {
   const [editPlatform, setEditPlatform] = useState("TikTok");
   const [editStatus, setEditStatus] = useState("Idea");
   const [noClipSelected, setNoClipSelected] = useState(false);
+
+  // Render pipeline state
+  const [renderJob, setRenderJob] = useState(null);   // current job from /api/render
+  const [renderError, setRenderError] = useState("");
+  const [rendering, setRendering] = useState(false);
 
   useEffect(() => {
     const stashed = getActiveClip();
@@ -122,8 +128,75 @@ export default function ClipEditorPage() {
     }
   };
 
-  const exportClip = async () => {
-    toast.info("Export coming soon", { description: "Full 1080p 9:16 export with burnt captions ships in the next beta wave." });
+  const exportClip = async () => { /* legacy stub — replaced by startRender */ };
+
+  // ---------- Real render pipeline ----------
+  const canRender = !!(activeClip?.project_id && activeClip?.render_ready);
+
+  const startRender = async () => {
+    if (!canRender) {
+      toast.error("Render unavailable", { description: "This clip has no stored source video. Re-upload to enable rendering." });
+      return;
+    }
+    setRendering(true);
+    setRenderError("");
+    setRenderJob(null);
+    try {
+      const { data } = await api.post("/render/start", {
+        project_id: activeClip.project_id,
+        start_seconds: activeClip.start_seconds,
+        end_seconds: activeClip.end_seconds,
+        title: editTitle || activeClip.title || "Hookify clip",
+        caption_text: editCaption || activeClip.caption_text || activeClip.hook || "",
+        platform: editPlatform || activeClip.platform || "TikTok",
+      }, { timeout: 15000 });
+      setRenderJob(data);
+      toast.success("Rendering started", { description: "We'll keep you posted on progress." });
+      pollRender(data.id);
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err?.message || "Render could not start.";
+      setRenderError(String(detail));
+      toast.error("Render failed to start", { description: String(detail) });
+    } finally {
+      setRendering(false);
+    }
+  };
+
+  const pollRender = async (jobId) => {
+    let attempts = 0;
+    const maxAttempts = 240; // 240 * 3s = 12 minutes max
+    const tick = async () => {
+      attempts += 1;
+      try {
+        const { data } = await api.get(`/render/${jobId}`, { timeout: 6000 });
+        setRenderJob(data);
+        if (data.status === "ready") {
+          toast.success("Clip ready", { description: "Download your 9:16 MP4." });
+          return;
+        }
+        if (data.status === "failed") {
+          setRenderError(data.error || "Render failed.");
+          toast.error("Render failed", { description: data.error || "Try again." });
+          return;
+        }
+      } catch (_) { /* keep polling — transient errors are fine */ }
+      if (attempts < maxAttempts) setTimeout(tick, 3000);
+    };
+    setTimeout(tick, 1500);
+  };
+
+  const downloadRender = () => {
+    if (!renderJob?.id || renderJob.status !== "ready") return;
+    // Cookie-based auth carries the JWT — direct anchor download works.
+    const base = (process.env.REACT_APP_BACKEND_URL || "").replace(/\/$/, "");
+    const url = `${base}/api/render/${renderJob.id}/download`;
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handleSaveClip = () => {
@@ -139,6 +212,9 @@ export default function ClipEditorPage() {
       caption_style: captionStyle,
       platform: editPlatform,
       status: editStatus,
+      project_id: activeClip.project_id || null,
+      render_ready: !!activeClip.render_ready,
+      render_job_id: renderJob?.id || activeClip.render_job_id || null,
     };
     saveClip(merged);
     setActiveClip(merged);
@@ -186,12 +262,26 @@ export default function ClipEditorPage() {
               </div>
             )}
             <button
-              disabled
-              title="Full video export is coming soon"
-              className="inline-flex items-center gap-2 border border-white/10 text-zinc-400 px-5 py-2.5 rounded-md text-sm cursor-not-allowed"
+              onClick={renderJob?.status === "ready" ? downloadRender : startRender}
+              disabled={!canRender || rendering || (renderJob && !["ready", "failed"].includes(renderJob.status))}
+              title={canRender ? "" : "Re-upload through /upload to enable real rendering."}
+              className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-md text-sm transition-colors ${
+                renderJob?.status === "ready"
+                  ? "bg-volt text-black hover:bg-volt-300 font-medium"
+                  : canRender
+                    ? "bg-volt text-black hover:bg-volt-300 font-medium disabled:opacity-60"
+                    : "border border-white/10 text-zinc-500 cursor-not-allowed"
+              }`}
               data-testid="export-clip"
             >
-              <Download className="w-4 h-4" /> Export · coming soon
+              {renderJob?.status === "ready"
+                ? (<><Download className="w-4 h-4" /> Download MP4</>)
+                : (renderJob && !["ready", "failed"].includes(renderJob.status))
+                  ? (<><Loader2 className="w-4 h-4 animate-spin" /> {renderJob.stage_label || "Rendering…"}</>)
+                  : canRender
+                    ? (<><Film className="w-4 h-4" /> Generate clip</>)
+                    : (<><Download className="w-4 h-4" /> Render unavailable</>)
+              }
             </button>
           </div>
         </div>
@@ -289,6 +379,61 @@ export default function ClipEditorPage() {
               >
                 <Save className="w-3.5 h-3.5" /> Save clip
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Render pipeline status panel */}
+        {(renderJob || renderError) && (
+          <div className="mb-6 bg-ink-900 border border-volt/20 rounded-lg p-5" data-testid="render-panel">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                {renderJob?.status === "ready" ? (
+                  <CheckCircle2 className="w-4 h-4 text-volt" />
+                ) : renderJob?.status === "failed" || renderError ? (
+                  <AlertCircle className="w-4 h-4 text-red-400" />
+                ) : (
+                  <Loader2 className="w-4 h-4 text-volt animate-spin" />
+                )}
+                <div>
+                  <div className="text-xs font-bold uppercase tracking-[0.2em] text-volt">Render pipeline</div>
+                  <div className="text-sm font-medium mt-0.5">
+                    {renderJob?.stage_label || (renderError ? "Render failed" : "Starting…")}
+                  </div>
+                </div>
+              </div>
+              <div className="text-[11px] font-mono text-zinc-500">
+                {renderJob?.progress != null ? `${renderJob.progress}%` : ""}
+                {renderJob?.size_bytes ? ` · ${(renderJob.size_bytes / 1024 / 1024).toFixed(1)} MB` : ""}
+              </div>
+            </div>
+            <div className="h-1.5 w-full rounded-full bg-white/5 overflow-hidden mb-3">
+              <div
+                className={`h-full transition-all duration-300 ${renderJob?.status === "failed" ? "bg-red-500" : "bg-volt"}`}
+                style={{ width: `${renderJob?.progress || 0}%` }}
+              />
+            </div>
+            <div className="text-[11px] text-zinc-500 leading-relaxed">
+              {renderJob?.status === "ready" && (
+                <span className="text-volt">Your 9:16 MP4 is ready in object storage. Click Download MP4 above.</span>
+              )}
+              {(renderJob?.status === "failed" || renderError) && (
+                <span className="text-red-300">{renderError || renderJob?.error}{" "}
+                  <button onClick={startRender} className="underline hover:text-white" data-testid="render-retry">Retry</button>
+                </span>
+              )}
+              {renderJob && !["ready", "failed"].includes(renderJob.status) && (
+                <>v1 pipeline · centered 9:16 crop · burnt-in captions · audio re-encoded to AAC. Smart reframing & fancy captions ship later.</>
+              )}
+            </div>
+          </div>
+        )}
+
+        {!canRender && activeClip && (
+          <div className="mb-6 bg-ink-900 border border-white/10 rounded-lg p-4 flex items-start gap-3 text-xs" data-testid="render-unavailable-hint">
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-zinc-500" />
+            <div className="text-zinc-400">
+              Real render needs the source video in storage. Re-upload through the Upload page — the analyzer now persists your source automatically, then "Generate clip" will produce a downloadable 9:16 MP4.
             </div>
           </div>
         )}

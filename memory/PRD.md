@@ -1,66 +1,73 @@
 # Hookify AI — Product Requirements Document
 
 ## Original Problem Statement
-Build a modern SaaS web app called "Hookify AI" (originally "ClipForge AI") that helps streamers, YouTubers, podcasters, and creators turn long-form content into short-form clips for TikTok, YouTube Shorts, and Instagram Reels.
+A SaaS web app that turns long-form video into short-form clips (TikTok / YouTube Shorts / Instagram Reels). Real auth, real upload, real Whisper transcription, real Claude clip suggestions, real FFmpeg 9:16 render with burnt captions, downloadable MP4, per-user workspace.
 
-Dark modern UI (#09090B ink, #CCFF00 volt-yellow accents). Real AI: Whisper transcription + Claude Sonnet 4.5 clip suggestions via Emergent LLM key. MVP upload limit 25MB. Graceful demo fallback when backend/AI unavailable.
+## Architecture (Feb 17, 2026 — v1)
+- **Frontend** (Vercel-deployable): React 19 + Tailwind + Shadcn. `frontend/src/`
+- **Backend** (Railway/Render-deployable): FastAPI + MongoDB (Motor async) + FFmpeg subprocess. `backend/server.py`
+- **Auth**: JWT in httpOnly cookies, bcrypt. Local-session fallback only when backend is literally unreachable.
+- **AI**: OpenAI Whisper (transcription) + Claude Sonnet 4.5 (clip ideas) — both via `EMERGENT_LLM_KEY`.
+- **Object storage**: Emergent Object Storage. Source videos + rendered MP4s persist across redeploys.
+- **Render**: subprocess FFmpeg with centered 9:16 crop → 1080×1920 → burnt SRT captions (volt-yellow). Background asyncio task with DB-backed job state and polling.
 
-## Architecture
-- **Frontend**: React 19 + React Router 7 + Tailwind + Shadcn UI
-- **Backend**: FastAPI + MongoDB (Motor async)
-- **Auth**: JWT email/password (with local-demo fallback for beta) + Google Auth stub
-- **AI**: OpenAI Whisper (transcript) + Claude Sonnet 4.5 (clip suggestions) — via Emergent LLM key
-- **Persistence**: LocalStorage-first for beta UX (saved clips, settings, templates, beta sign-ups); real DB models exist for users + ai_projects
+## Core User Journey (works end-to-end)
+1. Register / log in (real backend, JWT cookie)
+2. Upload an mp4/mov/mp3/wav/m4a ≤ 25 MB → backend saves source to object storage
+3. Whisper transcribes
+4. Claude returns 3–5 honest clip ideas (title, hook, caption, platform, confidence, reason)
+5. Open any idea in the editor → edit fields → "Save clip" persists to localStorage workspace
+6. "Generate clip" → backend cuts the source, reframes 9:16, burns captions, uploads MP4 to storage
+7. "Download MP4" delivers the file (cookie-authed)
 
-## User Personas
-- **Marcus (Podcaster)** — 60-min episodes → 8 viral shorts auto-extracted
-- **Riya (Twitch streamer)** — algorithm to surface highlights from 30hr/wk VODs
-- **Daniel (YouTuber)** — viral-score guidance and brand-safe captions
+## What's Implemented (v1 — Feb 17, 2026)
+### Backend endpoints
+- `POST /api/auth/register|login|logout`, `GET /api/auth/me` (real JWT)
+- `POST /api/ai/analyze` — multipart upload → Whisper → Claude → persists `ai_project` with `storage_path`
+- `GET /api/projects`, `GET /api/projects/{id}` — user history
+- `POST /api/render/start` — kicks off background FFmpeg
+- `GET /api/render/{job_id}` — poll progress (8 stages)
+- `GET /api/render/{job_id}/download` — stream MP4 (cookie/header/query auth)
+- `GET|POST|PATCH|DELETE /api/saved-clips` — per-user workspace CRUD
+- `GET|PUT /api/settings` — per-user preferences
 
-## Core Requirements
-- Premium dark UI (volt yellow on ink-950)
-- Realistic copywriting (no lorem ipsum)
-- Graceful offline/demo fallback (no AI key = sample data, no crash)
-- 9:16 vertical preview locked aspect ratio
-- data-testid coverage on all interactive elements
+### Frontend
+- Landing, Login, Signup, Pricing
+- Dashboard with upload card + project list + clip ideas + Join Beta CTA
+- Upload page with 6-stage pipeline UI + real `/api/ai/analyze` call + drag-drop
+- Editor with editable fields + "Generate clip" + 8-stage render progress + "Download MP4"
+- Workspace page (saved clips, platform/status filters, edit/delete)
+- Templates + Settings (currently localStorage on FE; backend endpoints ready to wire)
+- Beta requests admin page
+- Watch Demo + Join Beta dialogs
 
-## What's Implemented (Feb 2026)
-- ✅ Landing page (Hero, How it works, Features, Testimonials, Pricing, FAQ, Footer, CTA)
-- ✅ Auth: JWT login/register/me/refresh + local-demo session fallback for offline
-- ✅ Protected routes redirect unauthenticated users to /login
-- ✅ Dashboard with upload card + recent projects + generated clip ideas + Join Beta CTA
-- ✅ Upload flow: drag-and-drop, 6-stage animated pipeline, real `/api/ai/analyze`
-- ✅ Real AI: Whisper + Claude Sonnet 4.5 via Emergent LLM key
-- ✅ Editor: 9:16 preview, editable title/hook/caption/platform/status, saved viral titles, transcript panel, 7 caption styles, "More viral moments" panel (click to load suggestion)
-- ✅ **Save clip → workspace flow** with status pipeline (Idea → Editing → Ready to post → Posted)
-- ✅ **Workspace page** with platform/status filters, view/edit/delete, empty state
-- ✅ Templates page (6 templates) with **active template indicator + Clear button**
-- ✅ Settings page (5 fields) with localStorage persist + **Reset to default**
-- ✅ **Join Beta dialog** with 6 fields (name, email, type, platform, volume, pain) → persisted locally
-- ✅ **Internal Beta Requests page** (`/beta-requests`) showing local submissions
-- ✅ **Watch Demo dialog** with 4-step walkthrough (with a11y-friendly hidden title)
-- ✅ Sidebar nav: Studio, Upload, Workspace, Templates, Settings, Beta, Logout
-
-## Recent fixes (Feb 17, 2026)
-- Fixed runtime crash in ClipEditor "More viral moments" panel (`c.start.toFixed` → safe coercion via `start_seconds`)
-- Fixed ReferenceError in JoinBetaDialog (missing `platform`/`volume` state)
-- Added Reset button to Settings
-- Added Clear-active-template control on Templates
-- Added Workspace + Beta sidebar nav entries
-- Silenced Radix DialogTitle a11y warning in WatchDemoDialog (hidden title + description)
-
-## Prioritized Backlog
-### P1 (next session)
-- Real video export pipeline (FFmpeg → 1080p 9:16 with burnt captions). Currently "coming soon" pill.
-- Migrate Dashboard/Templates/Settings/Workspace from localStorage → real MongoDB models behind `/api/clips`, `/api/templates`, `/api/settings`
-- Direct-to-storage signed-URL uploads (works around Vercel 4.5MB serverless body limit)
-
-### P2
-- Stripe checkout for Creator/Studio paid plans
-- Real Google OAuth (currently a stub)
-- Speaker diarisation, multi-language captions
-- Team workspaces
-- Analytics dashboard (post-publish clip performance)
+## What's Fallback / Not Yet
+- Google OAuth — endpoint exists, no real callback (clearly labelled demo)
+- Email verification on register — not implemented
+- Password reset — not implemented
+- Stripe checkout — not wired
+- FE WorkspacePage/SettingsPage still localStorage (backend ready to swap)
+- Smart re-framing (face/speaker tracking)
+- Fancy captions (karaoke, animated)
 
 ## Test Credentials
 See `/app/memory/test_credentials.md`
+
+## Deployment Guide
+See `/app/memory/DEPLOYMENT_REPORT.md` — exhaustive env vars, hosting, FFmpeg setup, test steps.
+
+## Prioritized Backlog
+### P1 (next session)
+- Email verification (SendGrid/Resend) + password reset
+- Migrate WorkspacePage + SettingsPage frontend to call `/api/saved-clips` and `/api/settings`
+- Inline `<video>` preview of rendered MP4 in the editor (no download required to watch)
+- Stripe checkout for paid tiers
+
+### P2
+- Smart re-framing (face / speaker tracking)
+- Karaoke / animated word-by-word captions
+- Multi-language captions / translation
+- Team workspaces
+- Analytics dashboard (post-publish performance)
+- Real Google OAuth
+- Direct-to-storage signed-URL uploads (raise the 25 MB cap)
