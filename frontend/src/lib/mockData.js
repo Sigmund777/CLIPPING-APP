@@ -306,6 +306,21 @@ export function saveSettings(settings) {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); return true; } catch (_) { return false; }
 }
 
+// Active clip context — used to pass a selected AI clip suggestion into the editor.
+const ACTIVE_CLIP_KEY = "hookify_active_clip";
+export function setActiveClip(payload) {
+  try { localStorage.setItem(ACTIVE_CLIP_KEY, JSON.stringify(payload)); } catch (_) {}
+}
+export function getActiveClip() {
+  try {
+    const raw = localStorage.getItem(ACTIVE_CLIP_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) { return null; }
+}
+export function clearActiveClip() {
+  try { localStorage.removeItem(ACTIVE_CLIP_KEY); } catch (_) {}
+}
+
 // Templates localStorage helper — used by Upload flow to read the "active" template.
 const ACTIVE_TEMPLATE_KEY = "hookify_active_template";
 export function setActiveTemplate(tpl) {
