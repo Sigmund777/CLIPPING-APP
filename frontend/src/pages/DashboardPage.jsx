@@ -10,6 +10,7 @@ import {
   CheckCircle2, Pencil, Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
+import JoinBetaDialog from "../components/JoinBetaDialog";
 
 const PLAN_LIMITS = { free: 5, creator: 120, studio: Infinity };
 
@@ -214,15 +215,33 @@ export default function DashboardPage() {
       <div className="px-6 lg:px-10 py-10 max-w-7xl mx-auto space-y-12" data-testid="dashboard-page">
         {/* ============ Header ============ */}
         <header className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <div className="text-xs font-bold uppercase tracking-[0.2em] text-volt mb-2">Studio</div>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold uppercase tracking-[0.2em] text-volt">Studio</span>
+              <span
+                className="inline-flex items-center gap-1.5 border border-volt/30 bg-volt/5 rounded-full px-2.5 py-0.5"
+                data-testid="demo-mode-badge"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-volt animate-pulse-glow" />
+                <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-volt">Demo mode</span>
+              </span>
+            </div>
             <h1 className="font-heading text-3xl sm:text-4xl font-medium tracking-tight">Welcome back, {user?.name?.split(" ")[0] || "Creator"}.</h1>
-            <p className="mt-1.5 text-sm text-zinc-400">
-              {stats.total} clips in your library · <span className="text-volt">{user?.plan || "free"}</span> plan
-              {stats.totalViews > 0 && <> · <span className="text-zinc-300">{formatViews(stats.totalViews)}</span> total views</>}
+            <p className="text-sm text-zinc-400 max-w-xl">
+              Real uploads, AI clipping, and account verification are coming soon. Everything you see below is sample data so you can explore the studio.
             </p>
           </div>
           <div className="flex items-center gap-3">
+            <JoinBetaDialog
+              trigger={
+                <button
+                  className="inline-flex items-center gap-2 border border-volt/40 text-volt hover:bg-volt/10 transition-colors font-medium px-4 py-2.5 rounded-md text-sm"
+                  data-testid="dashboard-join-beta"
+                >
+                  <Sparkles className="w-4 h-4" /> Join beta
+                </button>
+              }
+            />
             <button
               onClick={() => nav("/upload")}
               className="inline-flex items-center gap-2 bg-volt text-black font-medium px-5 py-2.5 rounded-md hover:bg-volt-300 transition-colors text-sm"
@@ -234,33 +253,40 @@ export default function DashboardPage() {
         </header>
 
         {/* ============ Stats row ============ */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-white/5 border border-white/5 rounded-lg overflow-hidden" data-testid="dashboard-stats">
-          <StatTile
-            label="Total clips generated"
-            value={stats.total}
-            sub={`${stats.exportedCount} exported · ${stats.total - stats.exportedCount} drafts`}
-            icon={Scissors}
-          />
-          <StatTile
-            label="Exports remaining"
-            value={stats.exportsRemaining}
-            sub={user?.plan === "free" ? `of ${PLAN_LIMITS.free} on free plan` : "fair use applies"}
-            icon={Upload}
-            accent
-          />
-          <StatTile
-            label="Avg viral score"
-            value={stats.avgScore || "—"}
-            sub={stats.avgScore >= 85 ? "Top 10% of creators" : "Keep clipping to improve"}
-            icon={Flame}
-          />
-          <StatTile
-            label="Total views earned"
-            value={formatViews(stats.totalViews)}
-            sub={stats.totalViews > 0 ? "across TikTok · Shorts · Reels" : "publish your first clip"}
-            icon={TrendingUp}
-          />
-        </div>
+        <section>
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">Sample studio metrics</span>
+            <span className="inline-block w-1 h-1 rounded-full bg-zinc-700" />
+            <span className="text-[10px] text-zinc-600">Numbers shown are illustrative for demo purposes.</span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-white/5 border border-white/5 rounded-lg overflow-hidden" data-testid="dashboard-stats">
+            <StatTile
+              label="Total clips generated"
+              value={stats.total}
+              sub="Sample · across two source videos"
+              icon={Scissors}
+            />
+            <StatTile
+              label="Exports remaining"
+              value={stats.exportsRemaining}
+              sub={user?.plan === "free" ? `of ${PLAN_LIMITS.free} on demo plan` : "fair use applies"}
+              icon={Upload}
+              accent
+            />
+            <StatTile
+              label="Avg viral score"
+              value={stats.avgScore || "—"}
+              sub="Sample · benchmarked vs. 18K creators"
+              icon={Flame}
+            />
+            <StatTile
+              label="Total views earned"
+              value={formatViews(stats.totalViews)}
+              sub="Sample · TikTok · Shorts · Reels combined"
+              icon={TrendingUp}
+            />
+          </div>
+        </section>
 
         {/* ============ Best performing clip ============ */}
         {bestClip ? (
