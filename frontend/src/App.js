@@ -13,6 +13,8 @@ import ClipEditorPage from "./pages/ClipEditorPage";
 import UploadPage from "./pages/UploadPage";
 import TemplatesPage from "./pages/TemplatesPage";
 import SettingsPage from "./pages/SettingsPage";
+import WorkspacePage from "./pages/WorkspacePage";
+import BetaRequestsPage from "./pages/BetaRequestsPage";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -71,6 +73,10 @@ export default function App() {
             <Route path="/upload" element={<Protected><UploadPage /></Protected>} />
             <Route path="/templates" element={<Protected><TemplatesPage /></Protected>} />
             <Route path="/settings" element={<Protected><SettingsPage /></Protected>} />
+            <Route path="/workspace" element={<Protected><WorkspacePage /></Protected>} />
+            <Route path="/beta-requests" element={<Protected><BetaRequestsPage /></Protected>} />
+            <Route path="/editor" element={<Protected><ClipEditorPage /></Protected>} />
+            <Route path="/clip-editor" element={<Protected><ClipEditorPage /></Protected>} />
             <Route path="/clip/:clipId" element={<Protected><ClipEditorPage /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

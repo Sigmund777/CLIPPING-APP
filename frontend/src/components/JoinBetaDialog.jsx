@@ -15,6 +15,9 @@ const CREATOR_TYPES = [
   "Other",
 ];
 
+const PLATFORM_OPTIONS = ["TikTok", "YouTube Shorts", "Instagram Reels", "All three"];
+const VOLUME_OPTIONS = ["1–2 / week", "3–5 / week", "6–10 / week", "10+ / week"];
+
 /**
  * JoinBetaDialog
  * Self-contained early-access form. No backend call — submission is
@@ -130,6 +133,35 @@ export default function JoinBetaDialog({ trigger }) {
                 </select>
               </div>
 
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="beta-platform" className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 mb-1.5 block">Main platform</label>
+                  <select
+                    id="beta-platform"
+                    value={platform}
+                    onChange={(e) => setPlatform(e.target.value)}
+                    className="w-full bg-ink-950 border border-white/10 rounded-md px-3 py-2.5 text-sm focus:border-volt focus:outline-none transition-colors appearance-none"
+                    data-testid="beta-platform"
+                  >
+                    <option value="">Pick one…</option>
+                    {PLATFORM_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="beta-volume" className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 mb-1.5 block">Long-form / week</label>
+                  <select
+                    id="beta-volume"
+                    value={volume}
+                    onChange={(e) => setVolume(e.target.value)}
+                    className="w-full bg-ink-950 border border-white/10 rounded-md px-3 py-2.5 text-sm focus:border-volt focus:outline-none transition-colors appearance-none"
+                    data-testid="beta-volume"
+                  >
+                    <option value="">Pick one…</option>
+                    {VOLUME_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                </div>
+              </div>
+
               <div>
                 <label htmlFor="beta-pain" className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 mb-1.5 block">Your biggest editing pain</label>
                 <textarea
@@ -149,7 +181,7 @@ export default function JoinBetaDialog({ trigger }) {
             </div>
 
             <DialogFooter className="px-6 pb-6 pt-2 sm:justify-between items-center gap-3">
-              <div className="text-[11px] text-zinc-500">No spam. We'll only email once your seat is ready.</div>
+              <div className="text-[11px] text-zinc-500">Beta submissions are stored locally in this beta build.</div>
               <button
                 type="submit"
                 disabled={submitting}
@@ -165,10 +197,9 @@ export default function JoinBetaDialog({ trigger }) {
             <div className="w-12 h-12 rounded-md bg-volt/10 border border-volt/20 flex items-center justify-center mx-auto mb-5">
               <CheckCircle2 className="w-5 h-5 text-volt" />
             </div>
-            <h2 className="font-heading text-2xl font-medium tracking-tight">You're on the list.</h2>
-            <p className="mt-2 text-sm text-zinc-400 max-w-sm mx-auto leading-relaxed">
-              Thanks {name.split(" ")[0]}. We'll reach out at <span className="text-zinc-300">{email}</span> the moment your beta seat opens — usually within 2 weeks.
-            </p>
+            <h2 className="font-heading text-2xl font-medium tracking-tight">You're on the beta list.</h2>
+            <p className="mt-2 text-sm text-zinc-400">We'll email <span className="text-zinc-300">{email}</span> the moment access opens.</p>
+            <p className="mt-3 text-[11px] text-zinc-600">Beta submissions are stored locally in this beta build.</p>
             <div className="mt-6 inline-flex items-center gap-2 border border-white/10 rounded-md px-4 py-2 text-xs text-zinc-400">
               <Sparkles className="w-3 h-3 text-volt" /> Meanwhile, keep exploring demo mode.
             </div>
