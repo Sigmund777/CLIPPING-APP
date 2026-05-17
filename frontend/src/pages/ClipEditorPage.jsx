@@ -1,10 +1,13 @@
 import React, { useEffect, useState } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import DashboardLayout from "../components/DashboardLayout";
 import api from "../lib/api";
-import { DEMO_TRANSCRIPT, DEMO_SUGGESTIONS, getDemoClipById } from "../lib/mockData";
+import { DEMO_TRANSCRIPT, DEMO_SUGGESTIONS, getDemoClipById, getActiveClip, formatTimestamp } from "../lib/mockData";
 import { toast } from "sonner";
-import { ArrowLeft, Download, Play, Pause, Flame, Wand2, RefreshCw, Type } from "lucide-react";
+import {
+  ArrowLeft, Download, Play, Pause, Wand2, RefreshCw, Type,
+  Zap, MessageSquare, Clock, FileVideo, Lightbulb, Sparkles,
+} from "lucide-react";
 
 const CAPTION_STYLES = ["Bold-Yellow", "Subtitled", "Karaoke", "Minimal", "Big Mood", "Beast", "Cinema"];
 
@@ -36,14 +39,23 @@ function VerticalPreview({ caption, onTogglePlay, playing }) {
 
 export default function ClipEditorPage() {
   const { clipId } = useParams();
-  const nav = useNavigate();
   const [clip, setClip] = useState(null);
+  const [activeClip, setActiveClipState] = useState(null); // AI-suggestion context from upload flow
   const [transcript, setTranscript] = useState(null);
   const [suggestions, setSuggestions] = useState(null);
   const [activeTitle, setActiveTitle] = useState(0);
   const [captionStyle, setCaptionStyle] = useState("Bold-Yellow");
   const [playing, setPlaying] = useState(false);
   const [exporting, setExporting] = useState(false);
+
+  useEffect(() => {
+    // Pick up the selected suggestion (real AI or sample) from localStorage if present.
+    const stashed = getActiveClip();
+    if (stashed && stashed.id === clipId) {
+      setActiveClipState(stashed);
+      if (stashed.caption_style) setCaptionStyle(stashed.caption_style);
+    }
+  }, [clipId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,10 +70,22 @@ export default function ClipEditorPage() {
         safeCall(() => api.post("/ai/suggestions", { clip_id: clipId }, { timeout: 5000 }), DEMO_SUGGESTIONS),
       ]);
       if (cancelled) return;
-      setClip(c || getDemoClipById(clipId));
+      // If we have an active clip from the upload flow, seed editor state from it.
+      const stashed = getActiveClip();
+      const fromActive = (stashed && stashed.id === clipId) ? stashed : null;
+      const baseClip = c || getDemoClipById(clipId);
+      setClip(fromActive ? { ...baseClip, title: fromActive.title, duration_seconds: fromActive.duration_seconds || baseClip.duration_seconds } : baseClip);
       setTranscript(t || DEMO_TRANSCRIPT);
-      setSuggestions(s || DEMO_SUGGESTIONS);
-      setCaptionStyle((c && c.caption_style) || "Bold-Yellow");
+      // Prepend the active clip's title to the suggestions list so it's the default selected title.
+      const baseSugg = s || DEMO_SUGGESTIONS;
+      if (fromActive?.title) {
+        const filtered = (baseSugg.viral_titles || []).filter((t) => t !== fromActive.title);
+        setSuggestions({ ...baseSugg, viral_titles: [fromActive.title, ...filtered] });
+        setActiveTitle(0);
+      } else {
+        setSuggestions(baseSugg);
+      }
+      setCaptionStyle((fromActive?.caption_style) || (c && c.caption_style) || "Bold-Yellow");
     })();
     return () => { cancelled = true; };
   }, [clipId]);
@@ -79,14 +103,7 @@ export default function ClipEditorPage() {
   };
 
   const exportClip = async () => {
-    setExporting(true);
-    try {
-      await api.post(`/clips/${clipId}/export`, null, { timeout: 5000 });
-      await api.patch(`/clips/${clipId}`, { is_exported: true, caption_style: captionStyle, title: suggestions?.viral_titles?.[activeTitle] || clip.title }, { timeout: 5000 });
-    } catch (_) { /* offline mode: still show success */ }
-    setClip((c) => c ? { ...c, is_exported: true } : c);
-    toast.success("Clip exported — link copied to clipboard");
-    setExporting(false);
+    toast.info("Export coming soon", { description: "Full 1080p 9:16 export with burnt captions ships in the next beta wave." });
   };
 
   if (!clip) return <DashboardLayout><div className="p-10 text-zinc-500">Loading clip…</div></DashboardLayout>;
@@ -102,14 +119,75 @@ export default function ClipEditorPage() {
             <ArrowLeft className="w-4 h-4" /> Back to studio
           </Link>
           <div className="flex items-center gap-3">
-            <div className="inline-flex items-center gap-1.5 bg-volt/10 border border-volt/30 rounded-full px-3 py-1 text-xs">
-              <Flame className="w-3.5 h-3.5 text-volt" /> <span className="text-volt font-medium">Sample suggestion</span> <span className="text-zinc-500">· demo data</span>
-            </div>
-            <button onClick={exportClip} disabled={exporting} className="inline-flex items-center gap-2 bg-volt text-black font-medium px-5 py-2.5 rounded-md hover:bg-volt-300 transition-colors text-sm disabled:opacity-60" data-testid="export-clip">
-              <Download className="w-4 h-4" /> {exporting ? "Exporting…" : "Export clip"}
+            {activeClip?.mode === "real_ai" ? (
+              <div className="inline-flex items-center gap-1.5 bg-volt text-black rounded-full px-3 py-1 text-xs" data-testid="editor-badge-real">
+                <Zap className="w-3.5 h-3.5" /> <span className="font-bold uppercase tracking-[0.15em] text-[10px]">AI analysis complete</span>
+              </div>
+            ) : (
+              <div className="inline-flex items-center gap-1.5 bg-volt/10 border border-volt/30 rounded-full px-3 py-1 text-xs" data-testid="editor-badge-sample">
+                <Sparkles className="w-3.5 h-3.5 text-volt" /> <span className="text-volt font-medium">Sample results</span>
+              </div>
+            )}
+            <button
+              disabled
+              title="Full video export is coming soon"
+              className="inline-flex items-center gap-2 border border-white/10 text-zinc-400 px-5 py-2.5 rounded-md text-sm cursor-not-allowed"
+              data-testid="export-clip"
+            >
+              <Download className="w-4 h-4" /> Export · coming soon
             </button>
           </div>
         </div>
+
+        {activeClip && (
+          <div className="mb-6 grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-4 bg-ink-900 border border-volt/20 rounded-lg p-5" data-testid="ai-suggestion-panel">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                <span className="inline-flex items-center gap-1.5 bg-ink-950 border border-white/10 rounded-full px-2.5 py-1 font-mono text-zinc-400">
+                  <FileVideo className="w-3 h-3" /> <span data-testid="ai-source-filename">{activeClip.source_filename}</span>
+                </span>
+                <span className="inline-flex items-center gap-1.5 bg-ink-950 border border-white/10 rounded-full px-2.5 py-1 font-mono text-zinc-400">
+                  <Clock className="w-3 h-3" /> {formatTimestamp(activeClip.start_seconds || 0)} → {formatTimestamp(activeClip.end_seconds || 0)} · {activeClip.duration_seconds || 0}s
+                </span>
+                <span className="inline-flex items-center gap-1.5 bg-volt/10 border border-volt/30 rounded-full px-2.5 py-1 text-volt">
+                  <span className="w-1.5 h-1.5 rounded-full bg-volt" /> {activeClip.platform || "TikTok"}
+                </span>
+                {typeof activeClip.confidence === "number" && (
+                  <span className="inline-flex items-center gap-1.5 bg-volt/10 border border-volt/30 rounded-full px-2.5 py-1 text-volt">
+                    <Zap className="w-3 h-3" /> Confidence {activeClip.confidence}%
+                  </span>
+                )}
+              </div>
+
+              {activeClip.hook && (
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 mb-1 flex items-center gap-1.5"><Wand2 className="w-3 h-3 text-volt" /> Hook</div>
+                  <p className="text-sm text-zinc-200" data-testid="ai-hook">{activeClip.hook}</p>
+                </div>
+              )}
+
+              {activeClip.caption_text && (
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 mb-1.5 flex items-center gap-1.5">
+                    <MessageSquare className="w-3 h-3 text-volt" /> Caption · <span className="text-volt">{activeClip.caption_style || "Bold"}</span> style
+                  </div>
+                  <div className="text-xs text-zinc-300 bg-ink-950 border border-white/5 rounded-md p-3 whitespace-pre-line leading-relaxed max-w-xl" data-testid="ai-caption">{activeClip.caption_text}</div>
+                </div>
+              )}
+
+              {activeClip.reason && (
+                <div className="text-[11px] text-zinc-500 border-l-2 border-volt/30 pl-3 max-w-xl" data-testid="ai-reason">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 mr-2">Why this moment</span>
+                  {activeClip.reason}
+                </div>
+              )}
+            </div>
+            <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 font-bold lg:text-right whitespace-nowrap flex lg:flex-col items-center lg:items-end gap-2">
+              <Lightbulb className="w-3.5 h-3.5 text-volt" />
+              <span>{activeClip.mode === "real_ai" ? "Live AI · Whisper + Claude" : "Sample data"}</span>
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-8">
           {/* Left: preview + titles */}

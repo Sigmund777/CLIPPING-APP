@@ -4,7 +4,7 @@ import DashboardLayout from "../components/DashboardLayout";
 import JoinBetaDialog from "../components/JoinBetaDialog";
 import {
   DEMO_RECENT_UPLOADS, DEMO_GENERATED_CLIPS, formatRelative, formatTimestamp,
-  getActiveTemplate, clearActiveTemplate,
+  getActiveTemplate, clearActiveTemplate, setActiveClip,
 } from "../lib/mockData";
 import { useAuth } from "../lib/auth";
 import {
@@ -122,7 +122,15 @@ function ProjectRow({ project, onSelect, selected }) {
 }
 
 // ------------ Single clip idea card ------------
-function ClipIdeaCard({ idea }) {
+function ClipIdeaCard({ idea, sourceFilename }) {
+  const handleOpen = () => {
+    setActiveClip({
+      ...idea,
+      source_filename: sourceFilename || "demo-source.mp4",
+      mode: "demo",
+      saved_at: new Date().toISOString(),
+    });
+  };
   return (
     <div className="bg-ink-900 border border-white/5 rounded-lg p-5 flex flex-col gap-4" data-testid={`idea-card-${idea.id}`}>
       <div className="flex items-center justify-between gap-3">
@@ -155,7 +163,8 @@ function ClipIdeaCard({ idea }) {
       <div className="text-[11px] text-zinc-500 leading-relaxed border-l-2 border-volt/30 pl-3">{idea.reason}</div>
 
       <Link
-        to={`/clip/demo-clip-1`}
+        to={`/clip/${idea.id}`}
+        onClick={handleOpen}
         className="mt-auto inline-flex items-center justify-center gap-2 border border-white/10 hover:border-volt/40 hover:bg-volt/5 text-zinc-300 hover:text-volt rounded-md py-2.5 text-xs transition-colors"
         data-testid={`idea-open-${idea.id}`}
       >
@@ -248,7 +257,7 @@ export default function DashboardPage() {
 
           {selectedProject ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="ideas-grid">
-              {DEMO_GENERATED_CLIPS.map((i) => <ClipIdeaCard key={i.id} idea={i} />)}
+              {DEMO_GENERATED_CLIPS.map((i) => <ClipIdeaCard key={i.id} idea={i} sourceFilename={selectedProject.filename} />)}
             </div>
           ) : (
             <div className="border border-dashed border-white/10 rounded-lg p-12 text-center" data-testid="ideas-empty">

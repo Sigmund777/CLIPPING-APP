@@ -4,7 +4,7 @@ import DashboardLayout from "../components/DashboardLayout";
 import api, { formatApiErrorDetail } from "../lib/api";
 import {
   DEMO_GENERATED_CLIPS, formatTimestamp,
-  getActiveTemplate, clearActiveTemplate, loadSettings,
+  getActiveTemplate, clearActiveTemplate, loadSettings, setActiveClip,
 } from "../lib/mockData";
 import {
   UploadCloud, FileVideo, Sparkles, Loader2, CheckCircle2, ArrowRight,
@@ -12,13 +12,14 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-// Stage definitions (renamed per beta brief).
+// Stage definitions — order matches the beta processing pipeline.
 const STAGES = [
-  { id: "uploading",   label: "Uploading",                 hint: "Securely streaming your file to our pipeline." },
-  { id: "analyzing",   label: "Analyzing video",           hint: "Detecting speakers, scenes, and pacing beats." },
-  { id: "finding",     label: "Finding clip moments",      hint: "Scoring beats against retention patterns." },
-  { id: "hooks",       label: "Generating hooks",          hint: "Drafting hook lines, titles, and caption ideas." },
-  { id: "ready",       label: "Ready to review",           hint: "Suggestions are below." },
+  { id: "uploading",    label: "Uploading",            hint: "Securely streaming your file to our pipeline." },
+  { id: "extracting",   label: "Extracting audio",     hint: "Pulling the audio track for transcription." },
+  { id: "transcribing", label: "Transcribing",         hint: "Whisper is reading your audio word-by-word." },
+  { id: "finding",      label: "Finding clip moments", hint: "Scoring beats against retention patterns." },
+  { id: "hooks",        label: "Generating hooks",     hint: "Drafting hook lines, titles, and caption ideas." },
+  { id: "ready",        label: "Complete",             hint: "Suggestions are below." },
 ];
 
 const MAX_REAL_AI_BYTES = 25 * 1024 * 1024; // 25 MB matches backend Whisper limit
@@ -131,9 +132,7 @@ export default function UploadPage() {
     requestAnimationFrame(step);
   });
 
-  // --------------------------------------------------------------------------
-  // DEMO MODE — used when no real file is supplied (YouTube ingest button).
-  // --------------------------------------------------------------------------
+  // ----- Demo-mode stage progression (matches the real-AI sequence) -----
   const startDemo = async (sampleName = "youtube-source.mp4") => {
     setFile({ name: sampleName, size: 0 });
     setResults(null);
@@ -142,12 +141,13 @@ export default function UploadPage() {
 
     setStage("uploading");
     setProgress(0);
-    await animateProgressTo(100, 900);
+    await animateProgressTo(100, 800);
 
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    setStage("analyzing"); await wait(1400);
-    setStage("finding");   await wait(1600);
-    setStage("hooks");     await wait(1400);
+    setStage("extracting");   await wait(900);
+    setStage("transcribing"); await wait(1300);
+    setStage("finding");      await wait(1400);
+    setStage("hooks");        await wait(1200);
     setStage("ready");
 
     setResults(DEMO_GENERATED_CLIPS.slice(0, 3));
@@ -181,11 +181,12 @@ export default function UploadPage() {
     form.append("file", selectedFile);
 
     // Drive UI stages on a timer so the user sees progress even while Whisper/Claude runs.
-    let stageTimer = null;
+    let stageTimers = [];
     const runStageProgression = () => {
-      setTimeout(() => setStage("analyzing"), 0);
-      setTimeout(() => setStage("finding"), 8000);
-      stageTimer = setTimeout(() => setStage("hooks"), 18000);
+      stageTimers.push(setTimeout(() => setStage("extracting"), 0));
+      stageTimers.push(setTimeout(() => setStage("transcribing"), 3500));
+      stageTimers.push(setTimeout(() => setStage("finding"), 11000));
+      stageTimers.push(setTimeout(() => setStage("hooks"), 20000));
     };
 
     let response;
@@ -199,7 +200,6 @@ export default function UploadPage() {
         onUploadProgress: (e) => {
           if (e.total) {
             const pct = Math.round((e.loaded / e.total) * 100);
-            // Map the upload portion to 35-90% of the bar
             setProgress((p) => Math.max(p, Math.min(90, 35 + Math.round(pct * 0.55))));
           }
         },
@@ -208,18 +208,17 @@ export default function UploadPage() {
       response = await analyzePromise;
       await animateProgressTo(100, 400);
     } catch (err) {
-      if (stageTimer) clearTimeout(stageTimer);
-      const detail = formatApiErrorDetail(err?.response?.data?.detail) || err?.message || "Analysis failed.";
+      stageTimers.forEach(clearTimeout);
+      const detail = formatApiErrorDetail(err?.response?.data?.detail) || err?.message || "Live AI processing could not complete.";
       setErrorMsg(detail);
       setResultMode("demo");
-      toast.error("AI analysis failed", { description: `${detail} · Showing sample ideas instead.` });
-      // Graceful fallback so the user isn't left on a broken screen.
+      toast.error("Live AI processing could not complete", { description: "Showing sample clip ideas for now." });
       setStage("ready");
       setResults(DEMO_GENERATED_CLIPS.slice(0, 3));
       return;
     }
 
-    if (stageTimer) clearTimeout(stageTimer);
+    stageTimers.forEach(clearTimeout);
 
     const data = response?.data || {};
     const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
@@ -259,8 +258,14 @@ export default function UploadPage() {
   };
 
   const openClip = (clip) => {
-    // Route to the editor with demo data fallback (we don't pretend a backend persistence here).
-    nav(`/clip/demo-clip-1`);
+    // Persist the selected clip so the editor can display all real AI fields.
+    setActiveClip({
+      ...clip,
+      source_filename: file?.name || "video.mp4",
+      mode: resultMode || "real_ai",
+      saved_at: new Date().toISOString(),
+    });
+    nav(`/clip/${clip.id}`);
   };
 
   const onDrop = (e) => {
