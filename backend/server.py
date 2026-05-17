@@ -13,11 +13,15 @@ import jwt
 import requests
 import json
 import re
+import asyncio
+import tempfile
+import shutil
+import subprocess
 from io import BytesIO
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File, Header, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File, Header, Query, BackgroundTasks
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field
@@ -513,17 +517,35 @@ async def ai_analyze(file: UploadFile = File(...), user: dict = Depends(get_curr
     if len(cleaned) < 3:
         raise HTTPException(status_code=502, detail="AI returned too few valid suggestions. Please retry.")
 
-    # ---- 6. Persist a lightweight project record ----
+    # ---- 6. Persist project + source video for later rendering ----
     project_id = str(uuid.uuid4())
+    storage_path = None
+    storage_error = None
+    try:
+        upload_path = f"{APP_NAME}/sources/{user['id']}/{project_id}.{ext}"
+        put_result = put_object(upload_path, data, file.content_type or "video/mp4")
+        storage_path = put_result.get("path", upload_path)
+    except Exception as e:
+        # Storage failure is NOT fatal — analysis still returns suggestions for instant feedback.
+        storage_error = str(e)[:200]
+        logger.error(f"Source persist failed: {e}")
+
     try:
         await db.ai_projects.insert_one({
             "id": project_id,
             "user_id": user["id"],
             "filename": filename,
             "size_bytes": len(data),
+            "content_type": file.content_type or "video/mp4",
+            "ext": ext,
+            "storage_path": storage_path,
             "language": language,
             "duration_seconds": duration,
+            "transcript_segments": segments[:200],   # cap to keep doc small
+            "transcript_text": full_text[:20000],
+            "suggestions": cleaned,
             "suggestion_count": len(cleaned),
+            "is_deleted": False,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
     except Exception as e:
@@ -533,6 +555,9 @@ async def ai_analyze(file: UploadFile = File(...), user: dict = Depends(get_curr
         "project_id": project_id,
         "filename": filename,
         "mode": "real_ai",
+        "storage_path": storage_path,
+        "render_ready": bool(storage_path),
+        "storage_error": storage_error,
         "transcript": {
             "language": language,
             "duration": duration,
@@ -608,6 +633,374 @@ async def export_clip(clip_id: str, user: dict = Depends(get_current_user)):
     return {"ok": True, "download_url": f"/api/clips/{clip_id}/download"}
 
 
+# ============================================================
+# PROJECTS (uploaded source videos + their AI suggestions)
+# ============================================================
+@api_router.get("/projects")
+async def list_projects(user: dict = Depends(get_current_user)):
+    docs = await db.ai_projects.find(
+        {"user_id": user["id"], "is_deleted": {"$ne": True}},
+        {"_id": 0, "transcript_text": 0}
+    ).sort("created_at", -1).to_list(100)
+    return docs
+
+
+@api_router.get("/projects/{project_id}")
+async def get_project(project_id: str, user: dict = Depends(get_current_user)):
+    doc = await db.ai_projects.find_one({"id": project_id, "user_id": user["id"], "is_deleted": {"$ne": True}}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return doc
+
+
+# ============================================================
+# RENDER PIPELINE (FFmpeg 9:16 + burnt captions, persistent storage)
+# ============================================================
+RENDER_STAGES = [
+    ("preparing", 5,    "Preparing clip"),
+    ("downloading", 15, "Downloading source"),
+    ("cutting", 35,     "Cutting video"),
+    ("formatting", 55,  "Formatting 9:16"),
+    ("captions", 75,    "Adding captions"),
+    ("rendering", 90,   "Rendering MP4"),
+    ("uploading", 95,   "Saving to storage"),
+    ("ready", 100,      "Ready to download"),
+]
+
+
+class RenderStartIn(BaseModel):
+    project_id: str
+    start_seconds: float
+    end_seconds: float
+    title: str = ""
+    caption_text: str = ""
+    platform: str = "TikTok"
+
+
+def _ass_escape(t: str) -> str:
+    return (t or "").replace("\\", " ").replace("{", "(").replace("}", ")")
+
+
+def _write_srt(text: str, duration: float, path: Path):
+    def to_ts(s: float) -> str:
+        h = int(s // 3600)
+        m = int((s % 3600) // 60)
+        sec = s - h * 3600 - m * 60
+        return f"{h:02d}:{m:02d}:{sec:06.3f}".replace(".", ",")
+    safe = (text or "").replace("\r", "").strip() or " "
+    # SRT supports inline line breaks via real newlines; FFmpeg's libass handles them.
+    safe = _ass_escape(safe)
+    end = max(1.0, float(duration))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("1\n")
+        f.write(f"{to_ts(0)} --> {to_ts(end)}\n")
+        f.write(safe + "\n\n")
+
+
+async def _set_render_stage(job_id: str, stage_key: str):
+    stage = next((s for s in RENDER_STAGES if s[0] == stage_key), None)
+    if not stage:
+        return
+    await db.render_jobs.update_one(
+        {"id": job_id},
+        {"$set": {"status": stage[0], "progress": stage[1], "stage_label": stage[2]}}
+    )
+
+
+async def _run_render_job(job_id: str):
+    """Background pipeline: storage -> tmp -> ffmpeg -> storage."""
+    tmp_dir = Path(tempfile.mkdtemp(prefix=f"hookify-{job_id}-"))
+    try:
+        job = await db.render_jobs.find_one({"id": job_id}, {"_id": 0})
+        if not job:
+            return
+        project = await db.ai_projects.find_one({"id": job["project_id"], "user_id": job["user_id"]}, {"_id": 0})
+        if not project or not project.get("storage_path"):
+            await db.render_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error": "Source video missing in storage."}})
+            return
+
+        await _set_render_stage(job_id, "downloading")
+        src_ext = project.get("ext", "mp4")
+        src_path = tmp_dir / f"src.{src_ext}"
+        try:
+            data, _ct = get_object(project["storage_path"])
+        except Exception as e:
+            await db.render_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error": f"Storage fetch failed: {str(e)[:160]}"}})
+            return
+        src_path.write_bytes(data)
+
+        # FFmpeg invocation
+        start = max(0.0, float(job["start_seconds"]))
+        end = max(start + 1.0, float(job["end_seconds"]))
+        duration = end - start
+        caption_text = job.get("caption_text") or job.get("title") or ""
+
+        await _set_render_stage(job_id, "cutting")
+        srt_path = tmp_dir / "cap.srt"
+        _write_srt(caption_text, duration, srt_path)
+        out_path = tmp_dir / "out.mp4"
+
+        # Centered 9:16 crop -> 1080x1920, burnt SRT captions volt-yellow.
+        # PrimaryColour ASS = &HAABBGGRR. #CCFF00 -> BGR 00FFCC.
+        vf = (
+            "crop='min(iw,ih*9/16)':'min(ih,iw*16/9)':"
+            "'(iw-min(iw,ih*9/16))/2':'(ih-min(ih,iw*16/9))/2',"
+            "scale=1080:1920:force_original_aspect_ratio=increase,"
+            "crop=1080:1920,"
+            f"subtitles='{srt_path.as_posix()}':force_style='"
+            "Fontname=DejaVu Sans,Fontsize=20,Bold=1,"
+            "PrimaryColour=&H0000FFCC,OutlineColour=&H80000000,"
+            "BorderStyle=1,Outline=3,Shadow=0,Alignment=2,MarginV=160'"
+        )
+        cmd = [
+            "ffmpeg", "-y", "-ss", f"{start:.3f}", "-to", f"{end:.3f}",
+            "-i", str(src_path),
+            "-vf", vf,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+            "-movflags", "+faststart",
+            str(out_path),
+        ]
+        await _set_render_stage(job_id, "formatting")
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await _set_render_stage(job_id, "captions")
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            await db.render_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error": "FFmpeg render timed out after 10 min."}})
+            return
+
+        if proc.returncode != 0 or not out_path.exists():
+            err = (stderr or b"").decode(errors="ignore")[-500:]
+            logger.error(f"FFmpeg failed for {job_id}: {err}")
+            await db.render_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error": "FFmpeg failed. " + err[-200:]}})
+            return
+
+        await _set_render_stage(job_id, "rendering")
+
+        # Upload rendered MP4 to object storage (persistent).
+        await _set_render_stage(job_id, "uploading")
+        render_storage_path = f"{APP_NAME}/renders/{job['user_id']}/{job_id}.mp4"
+        out_bytes = out_path.read_bytes()
+        try:
+            put_result = put_object(render_storage_path, out_bytes, "video/mp4")
+            stored_path = put_result.get("path", render_storage_path)
+        except Exception as e:
+            logger.error(f"Render upload failed: {e}")
+            await db.render_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error": f"Render upload failed: {str(e)[:160]}"}})
+            return
+
+        await db.render_jobs.update_one(
+            {"id": job_id},
+            {"$set": {
+                "status": "ready", "progress": 100, "stage_label": "Ready to download",
+                "output_storage_path": stored_path,
+                "size_bytes": len(out_bytes),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        logger.info(f"Render {job_id} complete: {len(out_bytes)} bytes -> {stored_path}")
+    except Exception as e:
+        logger.exception(f"Render job {job_id} crashed")
+        await db.render_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error": str(e)[:200]}})
+    finally:
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+@api_router.post("/render/start")
+async def render_start(payload: RenderStartIn, user: dict = Depends(get_current_user)):
+    project = await db.ai_projects.find_one({"id": payload.project_id, "user_id": user["id"], "is_deleted": {"$ne": True}}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if not project.get("storage_path"):
+        raise HTTPException(status_code=400, detail="Source video not stored — re-upload to enable rendering.")
+
+    duration = max(1.0, float(payload.end_seconds) - float(payload.start_seconds))
+    if duration > 180:
+        raise HTTPException(status_code=400, detail="Clip too long. Max 3 minutes for v1.")
+
+    job_id = str(uuid.uuid4())
+    job = {
+        "id": job_id,
+        "user_id": user["id"],
+        "project_id": payload.project_id,
+        "title": payload.title or "Hookify clip",
+        "caption_text": payload.caption_text or "",
+        "platform": payload.platform or "TikTok",
+        "start_seconds": float(payload.start_seconds),
+        "end_seconds": float(payload.end_seconds),
+        "duration_seconds": duration,
+        "status": "preparing",
+        "stage_label": "Preparing clip",
+        "progress": 5,
+        "output_storage_path": None,
+        "size_bytes": None,
+        "error": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.render_jobs.insert_one(job)
+    # Fire-and-forget: render runs concurrently while we return immediately.
+    asyncio.create_task(_run_render_job(job_id))
+    job.pop("_id", None)
+    return job
+
+
+@api_router.get("/render/{job_id}")
+async def render_status(job_id: str, user: dict = Depends(get_current_user)):
+    job = await db.render_jobs.find_one({"id": job_id, "user_id": user["id"]}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Render job not found")
+    return job
+
+
+@api_router.get("/render/{job_id}/download")
+async def render_download(job_id: str, request: Request, auth: Optional[str] = Query(None), authorization: Optional[str] = Header(None)):
+    # Support cookie (default browser auth), Authorization header, or ?auth=token query.
+    token = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[7:]
+    elif auth:
+        token = auth
+    else:
+        token = request.cookies.get("access_token")
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Auth required")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user_id = payload["sub"]
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    job = await db.render_jobs.find_one({"id": job_id, "user_id": user_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Not found")
+    if job.get("status") != "ready" or not job.get("output_storage_path"):
+        raise HTTPException(status_code=409, detail="Render not ready")
+    data, _ct = get_object(job["output_storage_path"])
+    fname = re.sub(r"[^A-Za-z0-9._-]+", "-", job.get("title") or "hookify-clip")[:60] or "hookify-clip"
+    return Response(
+        content=data,
+        media_type="video/mp4",
+        headers={"Content-Disposition": f'attachment; filename="{fname}.mp4"'},
+    )
+
+
+# ============================================================
+# SAVED CLIPS (server-backed workspace)
+# ============================================================
+class SavedClipIn(BaseModel):
+    project_id: Optional[str] = None
+    title: str = ""
+    hook: str = ""
+    caption_text: str = ""
+    caption_style: str = "Bold"
+    platform: str = "TikTok"
+    status: str = "Idea"
+    start_seconds: float = 0
+    end_seconds: float = 0
+    duration_seconds: float = 0
+    confidence: Optional[int] = None
+    source_filename: Optional[str] = None
+    render_job_id: Optional[str] = None
+
+
+@api_router.get("/saved-clips")
+async def list_saved_clips(user: dict = Depends(get_current_user)):
+    docs = await db.saved_clips.find(
+        {"user_id": user["id"], "is_deleted": {"$ne": True}},
+        {"_id": 0}
+    ).sort("updated_at", -1).to_list(500)
+    return docs
+
+
+@api_router.post("/saved-clips")
+async def create_saved_clip(payload: SavedClipIn, user: dict = Depends(get_current_user)):
+    clip_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {**payload.model_dump(), "id": clip_id, "user_id": user["id"], "is_deleted": False, "created_at": now, "updated_at": now}
+    await db.saved_clips.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.patch("/saved-clips/{clip_id}")
+async def update_saved_clip(clip_id: str, payload: SavedClipIn, user: dict = Depends(get_current_user)):
+    patch = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
+    patch["updated_at"] = datetime.now(timezone.utc).isoformat()
+    res = await db.saved_clips.update_one(
+        {"id": clip_id, "user_id": user["id"], "is_deleted": {"$ne": True}},
+        {"$set": patch},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Saved clip not found")
+    doc = await db.saved_clips.find_one({"id": clip_id, "user_id": user["id"]}, {"_id": 0})
+    return doc
+
+
+@api_router.delete("/saved-clips/{clip_id}")
+async def delete_saved_clip(clip_id: str, user: dict = Depends(get_current_user)):
+    res = await db.saved_clips.update_one(
+        {"id": clip_id, "user_id": user["id"]},
+        {"$set": {"is_deleted": True, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Saved clip not found")
+    return {"ok": True}
+
+
+# ============================================================
+# USER SETTINGS (server-side, per user)
+# ============================================================
+class SettingsIn(BaseModel):
+    creator_name: Optional[str] = None
+    preferred_platform: Optional[str] = None
+    caption_style: Optional[str] = None
+    default_clip_length: Optional[int] = None
+    brand_tone: Optional[str] = None
+    active_template_id: Optional[str] = None
+
+
+DEFAULT_USER_SETTINGS = {
+    "creator_name": "",
+    "preferred_platform": "TikTok",
+    "caption_style": "Bold",
+    "default_clip_length": 30,
+    "brand_tone": "Energetic",
+    "active_template_id": None,
+}
+
+
+@api_router.get("/settings")
+async def get_settings(user: dict = Depends(get_current_user)):
+    doc = await db.user_settings.find_one({"user_id": user["id"]}, {"_id": 0, "user_id": 0})
+    return doc or {**DEFAULT_USER_SETTINGS, "creator_name": user.get("name", "")}
+
+
+@api_router.put("/settings")
+async def put_settings(payload: SettingsIn, user: dict = Depends(get_current_user)):
+    update = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.user_settings.update_one(
+        {"user_id": user["id"]},
+        {"$set": {**update, "user_id": user["id"]}},
+        upsert=True,
+    )
+    doc = await db.user_settings.find_one({"user_id": user["id"]}, {"_id": 0, "user_id": 0})
+    return doc
+
+
 @api_router.get("/")
 async def root():
     return {"service": "ClipForge AI API", "ok": True}
@@ -674,13 +1067,23 @@ async def startup():
     await db.users.create_index("email", unique=True)
     await db.clips.create_index("user_id")
     await db.videos.create_index("user_id")
+    await db.ai_projects.create_index("user_id")
+    await db.render_jobs.create_index("user_id")
+    await db.saved_clips.create_index("user_id")
+    await db.user_settings.create_index("user_id", unique=True)
     await seed_users()
     try:
         init_storage()
         logger.info("Object storage initialized")
     except Exception as e:
         logger.warning(f"Storage init deferred: {e}")
-    logger.info("ClipForge AI API ready")
+    # Confirm ffmpeg is on PATH for the render pipeline.
+    try:
+        ver = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=5)
+        logger.info(f"FFmpeg ready: {ver.stdout.splitlines()[0] if ver.stdout else 'unknown'}")
+    except Exception as e:
+        logger.error(f"FFmpeg unavailable — render pipeline will fail. {e}")
+    logger.info("Hookify AI API ready")
 
 
 @app.on_event("shutdown")

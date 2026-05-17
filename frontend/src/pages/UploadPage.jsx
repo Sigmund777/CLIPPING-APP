@@ -113,6 +113,7 @@ export default function UploadPage() {
   const [errorMsg, setErrorMsg] = useState("");
   const [activeTemplate, setActiveTpl] = useState(getActiveTemplate());
   const [settings] = useState(loadSettings());
+  const [responseMeta, setResponseMeta] = useState(null);
   const inputRef = useRef(null);
   const nav = useNavigate();
 
@@ -233,6 +234,11 @@ export default function UploadPage() {
     setStage("ready");
     setResults(suggestions);
     setResultMode("real_ai");
+    setResponseMeta({
+      project_id: data.project_id || null,
+      render_ready: !!data.render_ready,
+      storage_error: data.storage_error || null,
+    });
     toast.success("AI analysis complete", { description: `${suggestions.length} real clip ideas from your transcript.` });
   };
 
@@ -247,7 +253,7 @@ export default function UploadPage() {
 
   const reset = () => {
     setStage(null); setProgress(0); setFile(null); setResults(null);
-    setResultMode(null); setErrorMsg("");
+    setResultMode(null); setErrorMsg(""); setResponseMeta(null);
     if (inputRef.current) inputRef.current.value = "";
   };
 
@@ -263,6 +269,8 @@ export default function UploadPage() {
       ...clip,
       source_filename: file?.name || "video.mp4",
       mode: resultMode || "real_ai",
+      project_id: responseMeta?.project_id || null,
+      render_ready: !!responseMeta?.render_ready,
       saved_at: new Date().toISOString(),
     });
     nav(`/clip/${clip.id}`);
