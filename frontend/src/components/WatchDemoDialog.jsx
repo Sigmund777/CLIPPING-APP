@@ -1,8 +1,9 @@
 import React, { useState } from "react";
-import { Dialog, DialogContent, DialogTrigger } from "./ui/dialog";
+import { Dialog, DialogContent, DialogTrigger, DialogTitle, DialogDescription } from "./ui/dialog";
 import { Upload, Wand2, Scissors, Sparkles, ArrowRight, ArrowLeft, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import JoinBetaDialog from "./JoinBetaDialog";
+import * as VisuallyHidden from "@radix-ui/react-visually-hidden";
 
 const STEPS = [
   {
@@ -50,6 +51,10 @@ export default function WatchDemoDialog({ trigger }) {
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>{trigger}</DialogTrigger>
       <DialogContent className="bg-ink-900 border-white/10 text-white sm:max-w-lg p-0 overflow-hidden" data-testid="walkthrough-dialog">
+        <VisuallyHidden.Root>
+          <DialogTitle>Hookify walkthrough</DialogTitle>
+          <DialogDescription>90-second walkthrough of the Hookify beta experience.</DialogDescription>
+        </VisuallyHidden.Root>
         <div className="px-6 pt-6 pb-2 flex items-center justify-between">
           <div className="inline-flex items-center gap-1.5 border border-volt/30 bg-volt/5 rounded-full px-2.5 py-1">
             <span className="w-1.5 h-1.5 rounded-full bg-volt animate-pulse-glow" />
