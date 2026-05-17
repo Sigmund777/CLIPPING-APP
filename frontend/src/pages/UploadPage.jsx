@@ -1,14 +1,14 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "../components/DashboardLayout";
-import api from "../lib/api";
+import api, { formatApiErrorDetail } from "../lib/api";
 import {
   DEMO_GENERATED_CLIPS, formatTimestamp,
   getActiveTemplate, clearActiveTemplate, loadSettings,
 } from "../lib/mockData";
 import {
   UploadCloud, FileVideo, Sparkles, Loader2, CheckCircle2, ArrowRight,
-  Clock, RotateCcw, Wand2, MessageSquare, X,
+  Clock, RotateCcw, Wand2, MessageSquare, X, AlertCircle, Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -18,8 +18,11 @@ const STAGES = [
   { id: "analyzing",   label: "Analyzing video",           hint: "Detecting speakers, scenes, and pacing beats." },
   { id: "finding",     label: "Finding clip moments",      hint: "Scoring beats against retention patterns." },
   { id: "hooks",       label: "Generating hooks",          hint: "Drafting hook lines, titles, and caption ideas." },
-  { id: "ready",       label: "Ready to review",           hint: "Sample ideas are below — demo data only." },
+  { id: "ready",       label: "Ready to review",           hint: "Suggestions are below." },
 ];
+
+const MAX_REAL_AI_BYTES = 25 * 1024 * 1024; // 25 MB matches backend Whisper limit
+const REAL_AI_EXTS = ["mp4", "mov", "mp3", "wav", "m4a", "webm"];
 
 function Stage({ s, current, done, progress }) {
   const isCurrent = s.id === current;
@@ -52,14 +55,21 @@ function Stage({ s, current, done, progress }) {
 function ResultClipCard({ clip, onOpen }) {
   return (
     <div className="bg-ink-900 border border-white/5 rounded-lg p-6 flex flex-col gap-5 animate-fade-up hover:border-zinc-700/60 transition-colors" data-testid={`result-clip-${clip.id}`}>
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="inline-flex items-center gap-1.5 bg-ink-950 border border-white/10 rounded-full px-2.5 py-1 text-[10px] font-mono text-zinc-400">
           <Clock className="w-3 h-3" />
           {formatTimestamp(clip.start_seconds)} → {formatTimestamp(clip.end_seconds)} · {clip.duration_seconds}s
         </div>
-        <span className="inline-flex items-center gap-1.5 bg-volt/10 border border-volt/30 rounded-full px-2.5 py-1 text-[10px] text-volt">
-          <span className="w-1.5 h-1.5 rounded-full bg-volt" /> {clip.platform}
-        </span>
+        <div className="flex items-center gap-1.5">
+          {typeof clip.confidence === "number" && (
+            <span className="inline-flex items-center gap-1.5 bg-volt/10 border border-volt/30 rounded-full px-2.5 py-1 text-[10px] text-volt" title="AI confidence">
+              <Zap className="w-3 h-3" /> {clip.confidence}%
+            </span>
+          )}
+          <span className="inline-flex items-center gap-1.5 bg-volt/10 border border-volt/30 rounded-full px-2.5 py-1 text-[10px] text-volt">
+            <span className="w-1.5 h-1.5 rounded-full bg-volt" /> {clip.platform}
+          </span>
+        </div>
       </div>
 
       <div>
@@ -98,6 +108,8 @@ export default function UploadPage() {
   const [file, setFile] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [results, setResults] = useState(null);
+  const [resultMode, setResultMode] = useState(null); // "real_ai" | "demo"
+  const [errorMsg, setErrorMsg] = useState("");
   const [activeTemplate, setActiveTpl] = useState(getActiveTemplate());
   const [settings] = useState(loadSettings());
   const inputRef = useRef(null);
@@ -119,49 +131,124 @@ export default function UploadPage() {
     requestAnimationFrame(step);
   });
 
-  const start = async (selectedFile) => {
+  // --------------------------------------------------------------------------
+  // DEMO MODE — used when no real file is supplied (YouTube ingest button).
+  // --------------------------------------------------------------------------
+  const startDemo = async (sampleName = "youtube-source.mp4") => {
+    setFile({ name: sampleName, size: 0 });
+    setResults(null);
+    setErrorMsg("");
+    setResultMode("demo");
+
+    setStage("uploading");
+    setProgress(0);
+    await animateProgressTo(100, 900);
+
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    setStage("analyzing"); await wait(1400);
+    setStage("finding");   await wait(1600);
+    setStage("hooks");     await wait(1400);
+    setStage("ready");
+
+    setResults(DEMO_GENERATED_CLIPS.slice(0, 3));
+    toast.success("Sample clip ideas ready", { description: "Demo data — connect a real file for AI analysis." });
+  };
+
+  // --------------------------------------------------------------------------
+  // REAL AI MODE — Whisper + Claude Sonnet 4.5 via backend.
+  // --------------------------------------------------------------------------
+  const startRealAI = async (selectedFile) => {
+    // Frontend validation
+    const ext = (selectedFile.name || "").split(".").pop().toLowerCase();
+    if (!REAL_AI_EXTS.includes(ext)) {
+      toast.error(`Unsupported format ".${ext}"`, { description: "Use mp4, mov, mp3, wav, or m4a." });
+      return;
+    }
+    if (selectedFile.size > MAX_REAL_AI_BYTES) {
+      toast.error("File too large", { description: "The MVP limit is 25 MB. Trim or compress and try again." });
+      return;
+    }
+
     setFile(selectedFile);
     setResults(null);
+    setErrorMsg("");
+    setResultMode(null);
     setStage("uploading");
     setProgress(0);
 
-    const earlyAnim = animateProgressTo(30, 700);
-    const realUpload = (async () => {
-      try {
-        const form = new FormData();
-        form.append("file", selectedFile);
-        await api.post("/videos/upload", form, {
-          headers: { "Content-Type": "multipart/form-data" },
-          timeout: 60000,
-          onUploadProgress: (e) => {
-            if (e.total) {
-              const pct = Math.round((e.loaded / e.total) * 100);
-              setProgress((p) => Math.max(p, Math.min(95, pct)));
-            }
-          },
-        });
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn("Upload skipped (demo mode):", e?.message);
-      }
-    })();
+    const earlyAnim = animateProgressTo(35, 700);
+    const form = new FormData();
+    form.append("file", selectedFile);
 
-    await Promise.all([earlyAnim, realUpload]);
-    await animateProgressTo(100, 500);
+    // Drive UI stages on a timer so the user sees progress even while Whisper/Claude runs.
+    let stageTimer = null;
+    const runStageProgression = () => {
+      setTimeout(() => setStage("analyzing"), 0);
+      setTimeout(() => setStage("finding"), 8000);
+      stageTimer = setTimeout(() => setStage("hooks"), 18000);
+    };
 
-    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    setStage("analyzing"); await wait(1700);
-    setStage("finding");   await wait(2000);
-    setStage("hooks");     await wait(1800);
+    let response;
+    try {
+      // Wait for the initial progress animation to feel real.
+      await earlyAnim;
+      // Kick off the real analyze call.
+      const analyzePromise = api.post("/ai/analyze", form, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 180000, // 3 min ceiling
+        onUploadProgress: (e) => {
+          if (e.total) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            // Map the upload portion to 35-90% of the bar
+            setProgress((p) => Math.max(p, Math.min(90, 35 + Math.round(pct * 0.55))));
+          }
+        },
+      });
+      runStageProgression();
+      response = await analyzePromise;
+      await animateProgressTo(100, 400);
+    } catch (err) {
+      if (stageTimer) clearTimeout(stageTimer);
+      const detail = formatApiErrorDetail(err?.response?.data?.detail) || err?.message || "Analysis failed.";
+      setErrorMsg(detail);
+      setResultMode("demo");
+      toast.error("AI analysis failed", { description: `${detail} · Showing sample ideas instead.` });
+      // Graceful fallback so the user isn't left on a broken screen.
+      setStage("ready");
+      setResults(DEMO_GENERATED_CLIPS.slice(0, 3));
+      return;
+    }
+
+    if (stageTimer) clearTimeout(stageTimer);
+
+    const data = response?.data || {};
+    const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
+    if (suggestions.length < 1) {
+      setErrorMsg("AI returned no suggestions. Try a longer clip.");
+      setResultMode("demo");
+      setStage("ready");
+      setResults(DEMO_GENERATED_CLIPS.slice(0, 3));
+      toast.error("No usable suggestions", { description: "Showing sample ideas instead." });
+      return;
+    }
     setStage("ready");
+    setResults(suggestions);
+    setResultMode("real_ai");
+    toast.success("AI analysis complete", { description: `${suggestions.length} real clip ideas from your transcript.` });
+  };
 
-    // Always exactly 3 sample suggestions, per beta brief.
-    setResults(DEMO_GENERATED_CLIPS.slice(0, 3));
-    toast.success("Sample clip ideas ready", { description: "Demo data only — real AI processing coming soon." });
+  const start = async (selectedFile) => {
+    // If the file looks like a real file (has size > 0), run the real pipeline.
+    if (selectedFile && selectedFile.size && selectedFile.size > 0) {
+      await startRealAI(selectedFile);
+    } else {
+      await startDemo(selectedFile?.name);
+    }
   };
 
   const reset = () => {
     setStage(null); setProgress(0); setFile(null); setResults(null);
+    setResultMode(null); setErrorMsg("");
     if (inputRef.current) inputRef.current.value = "";
   };
 
@@ -192,13 +279,22 @@ export default function UploadPage() {
     <DashboardLayout>
       <div className="px-6 lg:px-10 py-10 max-w-5xl mx-auto" data-testid="upload-page">
 
-        {/* Header strip with beta + template + settings hint */}
+        {/* Header strip with beta + result mode badge */}
         <div className="flex items-center gap-2 flex-wrap mb-3">
           <span className="inline-flex items-center gap-1.5 border border-volt/30 bg-volt/5 rounded-full px-2.5 py-1">
             <span className="w-1.5 h-1.5 rounded-full bg-volt animate-pulse-glow" />
             <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-volt">Early access beta</span>
           </span>
-          <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500">Demo processing</span>
+          {resultMode === "real_ai" ? (
+            <span className="inline-flex items-center gap-1.5 bg-volt text-black rounded-full px-2.5 py-1" data-testid="badge-real-ai">
+              <Zap className="w-3 h-3" />
+              <span className="text-[10px] font-bold uppercase tracking-[0.18em]">AI analysis complete</span>
+            </span>
+          ) : (
+            <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500" data-testid="badge-demo-mode">
+              {resultMode === "demo" ? "Demo mode · sample data" : "Real AI · Whisper + Claude 4.5"}
+            </span>
+          )}
         </div>
 
         {/* ------- Dropzone ------- */}
@@ -206,7 +302,7 @@ export default function UploadPage() {
           <>
             <h1 className="font-heading text-3xl sm:text-4xl font-medium tracking-tight">Upload your long-form.</h1>
             <p className="mt-2 text-sm text-zinc-400 max-w-xl">
-              We'll return three sample clip ideas — each with a title, hook, caption, timestamp and platform recommendation. Real AI processing is not connected yet.
+              Drop an mp4, mov, mp3, wav or m4a (max 25 MB) and Hookify will transcribe it with Whisper and surface 3–5 real clip ideas using Claude Sonnet 4.5. Full export pipeline is coming soon.
             </p>
 
             {/* Active template / settings hint card */}
@@ -249,7 +345,7 @@ export default function UploadPage() {
               <Sparkles className="w-4 h-4 text-volt shrink-0" />
               <input type="text" placeholder="…or paste a YouTube / Vimeo / Twitch URL" className="flex-1 bg-transparent text-sm focus:outline-none" data-testid="upload-url" />
               <button
-                onClick={() => start({ name: "youtube-source.mp4", size: 0 })}
+                onClick={() => startDemo("youtube-source.mp4")}
                 className="bg-white/5 hover:bg-white/10 px-3 py-1.5 rounded-md text-xs"
                 data-testid="upload-ingest"
               >
@@ -263,7 +359,9 @@ export default function UploadPage() {
         {stage && stage !== "ready" && (
           <div data-testid="upload-pipeline">
             <h1 className="font-heading text-3xl sm:text-4xl font-medium tracking-tight">Hookify is reading your video.</h1>
-            <p className="mt-2 text-sm text-zinc-400">Demo processing — sample ideas appear when this finishes.</p>
+            <p className="mt-2 text-sm text-zinc-400">
+              {resultMode === "demo" ? "Demo processing — sample ideas appear when this finishes." : "Real AI processing · transcription via Whisper, analysis via Claude Sonnet 4.5."}
+            </p>
 
             <div className="mt-8 bg-ink-900 border border-white/5 rounded-lg p-5 flex items-center gap-4">
               <div className="w-12 h-12 rounded-md bg-volt/10 border border-volt/20 flex items-center justify-center shrink-0">
@@ -288,12 +386,31 @@ export default function UploadPage() {
         {/* ------- Results ------- */}
         {stage === "ready" && results && (
           <div data-testid="upload-results">
+            {errorMsg && (
+              <div className="mb-6 flex items-start gap-3 bg-red-500/5 border border-red-500/20 text-red-300 rounded-md p-4 text-sm" data-testid="upload-error">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <div>
+                  <div className="font-medium text-red-200">AI analysis failed</div>
+                  <div className="text-xs mt-1 text-red-300/80">{errorMsg}</div>
+                  <div className="text-xs mt-1 text-zinc-500">Showing sample ideas so you can still explore the studio. Try a smaller / clearer file.</div>
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-2">
               <div>
                 <h1 className="font-heading text-3xl sm:text-4xl font-medium tracking-tight">
-                  Here are <span className="text-volt">3 sample clip ideas</span>.
+                  {resultMode === "real_ai" ? (
+                    <>Here are <span className="text-volt">{results.length} real clip ideas</span> from your transcript.</>
+                  ) : (
+                    <>Here are <span className="text-volt">{results.length} sample clip ideas</span>.</>
+                  )}
                 </h1>
-                <p className="mt-2 text-sm text-zinc-400">Demo data shown so you can explore the studio. Real AI-generated ideas are coming once the beta opens.</p>
+                <p className="mt-2 text-sm text-zinc-400">
+                  {resultMode === "real_ai"
+                    ? "Generated by Whisper + Claude Sonnet 4.5. Pick one to open in the editor — full export pipeline is coming soon."
+                    : "Demo data shown so you can explore the studio. Upload a real audio/video file for live AI analysis."}
+                </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <button onClick={reset} className="inline-flex items-center gap-2 border border-white/10 text-zinc-300 hover:text-white hover:border-white/20 rounded-md px-4 py-2.5 text-sm transition-colors" data-testid="upload-reset">
@@ -308,7 +425,7 @@ export default function UploadPage() {
                 <div className="text-sm font-medium mt-1 truncate">{file?.name || "video.mp4"}</div>
               </div>
               <div className="bg-ink-900 p-4">
-                <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 font-bold">Sample ideas</div>
+                <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 font-bold">{resultMode === "real_ai" ? "AI ideas" : "Sample ideas"}</div>
                 <div className="text-sm font-medium mt-1 text-volt">{results.length}</div>
               </div>
               <div className="bg-ink-900 p-4">
@@ -317,7 +434,9 @@ export default function UploadPage() {
               </div>
               <div className="bg-ink-900 p-4">
                 <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 font-bold">Mode</div>
-                <div className="text-sm font-medium mt-1">Demo processing</div>
+                <div className={`text-sm font-medium mt-1 ${resultMode === "real_ai" ? "text-volt" : ""}`}>
+                  {resultMode === "real_ai" ? "Real AI · Whisper + Claude" : "Demo processing"}
+                </div>
               </div>
             </div>
 

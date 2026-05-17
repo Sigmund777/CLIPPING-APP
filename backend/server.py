@@ -11,6 +11,9 @@ import secrets
 import bcrypt
 import jwt
 import requests
+import json
+import re
+from io import BytesIO
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 
@@ -18,6 +21,10 @@ from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depend
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field
+
+# Emergent integrations — used for Whisper (audio→text) and Claude Sonnet 4.5 (text→clip ideas)
+from emergentintegrations.llm.openai import OpenAISpeechToText
+from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 # ---------- ENV / DB ----------
 mongo_url = os.environ['MONGO_URL']
@@ -305,6 +312,235 @@ async def gen_transcript(body: dict, user: dict = Depends(get_current_user)):
 async def gen_suggestions(body: dict, user: dict = Depends(get_current_user)):
     """Mocked AI clip suggestions."""
     return {"clips": MOCK_CLIP_SUGGESTIONS, "viral_titles": MOCK_TITLE_HOOKS}
+
+
+# ---------- REAL AI: Whisper + Claude Sonnet 4.5 ----------
+MAX_ANALYZE_BYTES = 25 * 1024 * 1024  # 25MB — matches Whisper file-size limit
+ALLOWED_ANALYZE_EXTS = {"mp4", "mov", "mp3", "wav", "m4a", "webm", "mpeg", "mpga"}
+ALLOWED_CAPTION_STYLES = {"Clean", "Bold", "Meme", "Educational"}
+ALLOWED_PLATFORMS = {"TikTok", "YouTube Shorts", "Instagram Reels"}
+
+CLIP_SYSTEM_PROMPT = """You are Hookify, an AI clip strategist. Given a transcript of a long-form podcast/stream/video with second-level timestamps, identify 3-5 of the strongest moments to clip into 30-90 second short-form videos for TikTok, YouTube Shorts, or Instagram Reels.
+
+Return STRICTLY valid JSON in this exact shape, with NO surrounding markdown, NO code fences, NO commentary:
+{
+  "suggestions": [
+    {
+      "start_seconds": <integer>,
+      "end_seconds": <integer>,
+      "title": "<short title idea, max 60 chars>",
+      "hook": "<first-line hook the creator should open with, max 120 chars>",
+      "caption_text": "<2-5 short lines of on-screen caption, use \\n line breaks, no emoji spam>",
+      "caption_style": "<one of: Clean, Bold, Meme, Educational>",
+      "platform": "<one of: TikTok, YouTube Shorts, Instagram Reels>",
+      "reason": "<one honest sentence on why this moment will pop>",
+      "confidence": <integer 0-100>
+    }
+  ]
+}
+
+Rules:
+- Each clip must be 30 to 90 seconds long.
+- start_seconds and end_seconds MUST come from timestamps you see in the transcript.
+- Confidence is honest: 90+ = strong viral candidate, 70-89 = solid pick, below 70 = decent but optional.
+- Sort suggestions by confidence descending.
+- Return 3 to 5 suggestions, never more, never fewer than 3 — if the source is too short or thin, still return your three best moments.
+- Do not invent content not present in the transcript."""
+
+
+def _safe_str(v, default=""):
+    return str(v).strip() if v is not None else default
+
+
+def _coerce_suggestion(s, transcript_duration):
+    """Normalise a single suggestion dict so the frontend can render it safely."""
+    try:
+        start = max(0, int(round(float(s.get("start_seconds", 0)))))
+        end = max(start + 1, int(round(float(s.get("end_seconds", start + 30)))))
+        if transcript_duration:
+            end = min(end, int(round(float(transcript_duration))))
+        duration = max(0, end - start)
+        title = _safe_str(s.get("title"))[:80] or "Untitled clip idea"
+        hook = _safe_str(s.get("hook"))[:200] or title
+        caption_text = _safe_str(s.get("caption_text"))[:400] or hook
+        caption_style = _safe_str(s.get("caption_style"), "Bold")
+        if caption_style not in ALLOWED_CAPTION_STYLES:
+            caption_style = "Bold"
+        platform = _safe_str(s.get("platform"), "TikTok")
+        if platform not in ALLOWED_PLATFORMS:
+            platform = "TikTok"
+        confidence = int(round(float(s.get("confidence", 75))))
+        confidence = max(0, min(100, confidence))
+        reason = _safe_str(s.get("reason"))[:240] or "Strong standalone moment with a clear hook."
+        return {
+            "id": f"real-{uuid.uuid4().hex[:8]}",
+            "start_seconds": start,
+            "end_seconds": end,
+            "duration_seconds": duration,
+            "title": title,
+            "hook": hook,
+            "caption_text": caption_text,
+            "caption_style": caption_style,
+            "platform": platform,
+            "reason": reason,
+            "confidence": confidence,
+        }
+    except Exception:
+        return None
+
+
+def _extract_json(raw_text):
+    """LLMs sometimes wrap JSON in code fences; strip and parse defensively."""
+    txt = raw_text.strip()
+    if txt.startswith("```"):
+        txt = re.sub(r"^```(?:json)?\s*", "", txt)
+        txt = re.sub(r"\s*```$", "", txt)
+    # Fallback: find first { ... last }
+    if not txt.startswith("{"):
+        m = re.search(r"\{[\s\S]*\}", txt)
+        if m:
+            txt = m.group(0)
+    return json.loads(txt)
+
+
+@api_router.post("/ai/analyze")
+async def ai_analyze(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    """Real AI pipeline: Whisper transcription → Claude Sonnet 4.5 clip suggestions."""
+    if not EMERGENT_KEY:
+        raise HTTPException(status_code=503, detail="AI not configured. EMERGENT_LLM_KEY missing on server.")
+
+    # ---- 1. Validate ----
+    filename = file.filename or "upload"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in ALLOWED_ANALYZE_EXTS:
+        raise HTTPException(status_code=400, detail=f"Unsupported format '.{ext}'. Use mp4, mov, mp3, wav, or m4a.")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file.")
+    if len(data) > MAX_ANALYZE_BYTES:
+        raise HTTPException(status_code=413, detail="File too large. The MVP limit is 25 MB. Trim or compress your file and try again.")
+
+    # ---- 2. Whisper transcription ----
+    # Whisper supports mp3/mp4/mpeg/mpga/m4a/wav/webm. .mov containers usually work
+    # when passed with an .mp4 extension hint to the API.
+    send_ext = "mp4" if ext == "mov" else ext
+    buf = BytesIO(data)
+    buf.name = f"upload.{send_ext}"
+
+    try:
+        stt = OpenAISpeechToText(api_key=EMERGENT_KEY)
+        transcript = await stt.transcribe(
+            file=buf,
+            model="whisper-1",
+            response_format="verbose_json",
+            timestamp_granularities=["segment"],
+        )
+    except Exception as e:
+        logger.error(f"Whisper transcription failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Transcription failed. {str(e)[:200]}")
+
+    # Normalise transcript segments (Whisper SDK may return dicts OR objects).
+    raw_segments = getattr(transcript, "segments", None) or []
+    segments = []
+    for seg in raw_segments:
+        try:
+            if isinstance(seg, dict):
+                start = float(seg.get("start", 0))
+                end = float(seg.get("end", 0))
+                text = _safe_str(seg.get("text", ""))
+            else:
+                start = float(getattr(seg, "start", 0))
+                end = float(getattr(seg, "end", 0))
+                text = _safe_str(getattr(seg, "text", ""))
+            if text:
+                segments.append({"start": start, "end": end, "text": text})
+        except Exception:
+            continue
+
+    full_text = _safe_str(getattr(transcript, "text", "")) or " ".join(s["text"] for s in segments)
+    duration = float(getattr(transcript, "duration", 0)) or (segments[-1]["end"] if segments else 0)
+    language = _safe_str(getattr(transcript, "language", "en")) or "en"
+    logger.info(f"Whisper OK: {len(segments)} segments, {len(full_text)} chars, {duration:.1f}s")
+
+    if not segments and not full_text:
+        raise HTTPException(status_code=422, detail="Transcription returned no usable text. Try a longer or clearer recording.")
+
+    # ---- 3. Build LLM prompt ----
+    if segments:
+        ts_lines = [f"[{s['start']:.1f}s-{s['end']:.1f}s] {s['text']}" for s in segments if s["text"]]
+        transcript_for_llm = "\n".join(ts_lines)
+    else:
+        transcript_for_llm = f"[0.0s-{duration:.1f}s] {full_text}"
+
+    # Cap prompt size to avoid blowing context (Claude 4.5 has plenty, but be sensible).
+    if len(transcript_for_llm) > 60000:
+        transcript_for_llm = transcript_for_llm[:60000] + "\n\n[…transcript truncated for analysis…]"
+
+    user_prompt = (
+        f"Source duration: {duration:.1f}s. Language: {language}.\n\n"
+        f"TRANSCRIPT (with second-level timestamps):\n\n{transcript_for_llm}\n\n"
+        "Generate the JSON now. No commentary, no markdown — JSON only."
+    )
+
+    # ---- 4. Claude Sonnet 4.5 ----
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_KEY,
+            session_id=f"hookify-analyze-{user['id']}-{uuid.uuid4().hex[:8]}",
+            system_message=CLIP_SYSTEM_PROMPT,
+        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        response_text = await chat.send_message(UserMessage(text=user_prompt))
+    except Exception as e:
+        logger.error(f"Claude analysis failed: {e}")
+        raise HTTPException(status_code=502, detail=f"AI analysis failed. {str(e)[:200]}")
+
+    # ---- 5. Parse + coerce ----
+    try:
+        parsed = _extract_json(response_text)
+    except Exception:
+        logger.error(f"AI returned non-JSON: {response_text[:400]}")
+        raise HTTPException(status_code=502, detail="AI returned an unreadable response. Please retry.")
+
+    raw_suggestions = parsed.get("suggestions") or []
+    cleaned = []
+    for s in raw_suggestions[:5]:
+        cs = _coerce_suggestion(s, duration)
+        if cs:
+            cleaned.append(cs)
+    cleaned.sort(key=lambda x: x["confidence"], reverse=True)
+
+    if len(cleaned) < 3:
+        raise HTTPException(status_code=502, detail="AI returned too few valid suggestions. Please retry.")
+
+    # ---- 6. Persist a lightweight project record ----
+    project_id = str(uuid.uuid4())
+    try:
+        await db.ai_projects.insert_one({
+            "id": project_id,
+            "user_id": user["id"],
+            "filename": filename,
+            "size_bytes": len(data),
+            "language": language,
+            "duration_seconds": duration,
+            "suggestion_count": len(cleaned),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        logger.warning(f"Could not persist ai_project: {e}")
+
+    return {
+        "project_id": project_id,
+        "filename": filename,
+        "mode": "real_ai",
+        "transcript": {
+            "language": language,
+            "duration": duration,
+            "segments": segments,
+            "text": full_text,
+        },
+        "suggestions": cleaned,
+    }
 
 
 @api_router.post("/clips")
