@@ -102,8 +102,8 @@ export default function ClipEditorPage() {
             <ArrowLeft className="w-4 h-4" /> Back to studio
           </Link>
           <div className="flex items-center gap-3">
-            <div className="inline-flex items-center gap-1.5 bg-ink-900 border border-white/10 rounded-full px-3 py-1 text-xs">
-              <Flame className="w-3.5 h-3.5 text-volt" /> <span className="font-mono">Score <span className="text-volt">{clip.viral_score}</span>/100</span>
+            <div className="inline-flex items-center gap-1.5 bg-volt/10 border border-volt/30 rounded-full px-3 py-1 text-xs">
+              <Flame className="w-3.5 h-3.5 text-volt" /> <span className="text-volt font-medium">Sample suggestion</span> <span className="text-zinc-500">· demo data</span>
             </div>
             <button onClick={exportClip} disabled={exporting} className="inline-flex items-center gap-2 bg-volt text-black font-medium px-5 py-2.5 rounded-md hover:bg-volt-300 transition-colors text-sm disabled:opacity-60" data-testid="export-clip">
               <Download className="w-4 h-4" /> {exporting ? "Exporting…" : "Export clip"}

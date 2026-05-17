@@ -11,6 +11,8 @@ import PricingPage from "./pages/PricingPage";
 import DashboardPage from "./pages/DashboardPage";
 import ClipEditorPage from "./pages/ClipEditorPage";
 import UploadPage from "./pages/UploadPage";
+import TemplatesPage from "./pages/TemplatesPage";
+import SettingsPage from "./pages/SettingsPage";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -67,6 +69,8 @@ export default function App() {
             <Route path="/pricing" element={<PricingPage />} />
             <Route path="/dashboard" element={<Protected><DashboardPage /></Protected>} />
             <Route path="/upload" element={<Protected><UploadPage /></Protected>} />
+            <Route path="/templates" element={<Protected><TemplatesPage /></Protected>} />
+            <Route path="/settings" element={<Protected><SettingsPage /></Protected>} />
             <Route path="/clip/:clipId" element={<Protected><ClipEditorPage /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

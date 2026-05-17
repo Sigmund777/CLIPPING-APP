@@ -8,8 +8,10 @@ export default function DashboardLayout({ children }) {
   const nav = useNavigate();
   const loc = useLocation();
   const NAV = [
-    { to: "/dashboard", label: "Clips", icon: LayoutGrid },
+    { to: "/dashboard", label: "Studio", icon: LayoutGrid },
     { to: "/upload", label: "Upload", icon: Upload },
+    { to: "/templates", label: "Templates", icon: Scissors },
+    { to: "/settings", label: "Settings", icon: Settings },
   ];
 
   return (
@@ -28,12 +30,6 @@ export default function DashboardLayout({ children }) {
               </Link>
             );
           })}
-          <a href="#" className="flex items-center gap-3 px-3 py-2 rounded-md text-sm text-zinc-400 hover:text-white hover:bg-white/5 border border-transparent">
-            <Scissors className="w-4 h-4" /> Templates
-          </a>
-          <a href="#" className="flex items-center gap-3 px-3 py-2 rounded-md text-sm text-zinc-400 hover:text-white hover:bg-white/5 border border-transparent">
-            <Settings className="w-4 h-4" /> Settings
-          </a>
         </nav>
         <div className="p-4 border-t border-white/5">
           <div className="flex items-center gap-3 mb-3">
@@ -42,7 +38,7 @@ export default function DashboardLayout({ children }) {
             </div>
             <div className="min-w-0">
               <div className="text-sm font-medium truncate">{user?.name}</div>
-              <div className="text-[10px] uppercase tracking-wider text-zinc-500">{user?.plan} plan</div>
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500">Beta · early access</div>
             </div>
           </div>
           <button onClick={async () => { await logout(); nav("/"); }} className="w-full flex items-center justify-center gap-2 text-xs text-zinc-400 hover:text-white border border-white/5 rounded-md py-2 hover:border-white/20 transition-colors" data-testid="side-logout">
