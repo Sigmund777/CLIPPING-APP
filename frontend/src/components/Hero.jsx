@@ -1,6 +1,7 @@
 import React from "react";
 import { Link } from "react-router-dom";
-import { ArrowUpRight, Play } from "lucide-react";
+import { ArrowUpRight, Play, Sparkles } from "lucide-react";
+import JoinBetaDialog from "./JoinBetaDialog";
 
 const HERO_BG = "https://static.prod-images.emergentagent.com/jobs/125d395e-5f31-405e-a930-761de29c625f/images/a4d8d1aebf84e409a66aade962912ad10e28a226f6226ecc9d1112c6d5eb9c67.png";
 
@@ -34,6 +35,16 @@ export default function Hero() {
               Start clipping free
               <ArrowUpRight className="w-4 h-4 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
             </Link>
+            <JoinBetaDialog
+              trigger={
+                <button
+                  className="inline-flex items-center gap-2 border border-volt/40 text-volt hover:bg-volt/10 transition-colors font-medium px-5 py-3.5 rounded-md text-sm"
+                  data-testid="hero-join-beta"
+                >
+                  <Sparkles className="w-4 h-4" /> Join beta
+                </button>
+              }
+            />
             <a href="#how" className="inline-flex items-center gap-2 text-zinc-300 hover:text-white px-4 py-3.5 group" data-testid="hero-cta-secondary">
               <span className="w-9 h-9 rounded-full border border-white/15 flex items-center justify-center group-hover:border-volt/50 transition-colors">
                 <Play className="w-3 h-3 text-white fill-white" />
