@@ -212,7 +212,7 @@ export default function UploadPage() {
       const detail = formatApiErrorDetail(err?.response?.data?.detail) || err?.message || "Live AI processing could not complete.";
       setErrorMsg(detail);
       setResultMode("demo");
-      toast.error("Live AI processing could not complete", { description: "Showing sample clip ideas for now." });
+      toast.error("Live AI processing", { description: "Not connected in this beta build yet. Showing sample clip ideas for now." });
       setStage("ready");
       setResults(DEMO_GENERATED_CLIPS.slice(0, 3));
       return;
@@ -392,12 +392,11 @@ export default function UploadPage() {
         {stage === "ready" && results && (
           <div data-testid="upload-results">
             {errorMsg && (
-              <div className="mb-6 flex items-start gap-3 bg-red-500/5 border border-red-500/20 text-red-300 rounded-md p-4 text-sm" data-testid="upload-error">
-                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+              <div className="mb-6 flex items-start gap-3 bg-volt/5 border border-volt/20 text-zinc-200 rounded-md p-4 text-sm" data-testid="upload-error">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-volt" />
                 <div>
-                  <div className="font-medium text-red-200">AI analysis failed</div>
-                  <div className="text-xs mt-1 text-red-300/80">{errorMsg}</div>
-                  <div className="text-xs mt-1 text-zinc-500">Showing sample ideas so you can still explore the studio. Try a smaller / clearer file.</div>
+                  <div className="font-medium text-white">Live AI processing is not connected in this beta build yet.</div>
+                  <div className="text-xs mt-1 text-zinc-400">Showing sample clip ideas for now — you can still explore the editor, save clips, and request real access.</div>
                 </div>
               </div>
             )}

@@ -2,10 +2,10 @@ import React, { useEffect, useState } from "react";
 import DashboardLayout from "../components/DashboardLayout";
 import {
   loadSettings, saveSettings, PLATFORM_OPTIONS, CAPTION_STYLE_OPTIONS,
-  CLIP_LENGTH_OPTIONS, BRAND_TONE_OPTIONS,
+  CLIP_LENGTH_OPTIONS, BRAND_TONE_OPTIONS, DEFAULT_SETTINGS,
 } from "../lib/mockData";
 import { useAuth } from "../lib/auth";
-import { Settings as SettingsIcon, Save, Check, User, Smartphone, Type, Clock, Speaker } from "lucide-react";
+import { Settings as SettingsIcon, Save, Check, User, Smartphone, Type, Clock, Speaker, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
 function Field({ label, icon: Icon, children, hint }) {
@@ -73,6 +73,17 @@ export default function SettingsPage() {
     } else {
       toast.error("Could not save settings");
     }
+  };
+
+  const handleReset = () => {
+    if (!window.confirm("Reset all settings to default?")) return;
+    const next = { ...DEFAULT_SETTINGS, creator_name: user?.name || "" };
+    setSettings(next);
+    saveSettings(next);
+    setSaved(true);
+    setDirty(false);
+    toast.success("Settings reset to default");
+    setTimeout(() => setSaved(false), 2400);
   };
 
   return (
@@ -147,13 +158,23 @@ export default function SettingsPage() {
               {saved ? <span className="text-volt inline-flex items-center gap-1.5"><Check className="w-3 h-3" /> Saved to this browser</span>
                      : dirty ? "Unsaved changes" : "All up to date"}
             </div>
-            <button
-              type="submit"
-              className="inline-flex items-center gap-2 bg-volt text-black font-medium px-5 py-2.5 rounded-md hover:bg-volt-300 transition-colors text-sm disabled:opacity-60"
-              data-testid="settings-save"
-            >
-              <Save className="w-4 h-4" /> Save settings
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleReset}
+                className="inline-flex items-center gap-2 border border-white/10 text-zinc-300 hover:text-white hover:border-white/25 px-4 py-2.5 rounded-md text-sm transition-colors"
+                data-testid="settings-reset"
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> Reset
+              </button>
+              <button
+                type="submit"
+                className="inline-flex items-center gap-2 bg-volt text-black font-medium px-5 py-2.5 rounded-md hover:bg-volt-300 transition-colors text-sm disabled:opacity-60"
+                data-testid="settings-save"
+              >
+                <Save className="w-4 h-4" /> Save settings
+              </button>
+            </div>
           </div>
         </form>
       </div>

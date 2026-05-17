@@ -321,6 +321,39 @@ export function clearActiveClip() {
   try { localStorage.removeItem(ACTIVE_CLIP_KEY); } catch (_) {}
 }
 
+// Saved clips — persisted edits / status changes for the Workspace area.
+const SAVED_CLIPS_KEY = "hookify_saved_clips";
+export const CLIP_STATUSES = ["Idea", "Editing", "Ready to post", "Posted"];
+export function loadSavedClips() {
+  try {
+    const raw = localStorage.getItem(SAVED_CLIPS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (_) { return []; }
+}
+export function saveClip(clip) {
+  const all = loadSavedClips();
+  const existing = all.findIndex((c) => c.id === clip.id);
+  const next = { ...clip, updated_at: new Date().toISOString() };
+  if (existing >= 0) all[existing] = next;
+  else all.unshift({ ...next, saved_at: next.saved_at || new Date().toISOString() });
+  try { localStorage.setItem(SAVED_CLIPS_KEY, JSON.stringify(all)); } catch (_) {}
+  return next;
+}
+export function deleteSavedClip(id) {
+  const remaining = loadSavedClips().filter((c) => c.id !== id);
+  try { localStorage.setItem(SAVED_CLIPS_KEY, JSON.stringify(remaining)); } catch (_) {}
+  return remaining;
+}
+
+// Beta requests — locally stored beta-signup submissions.
+const BETA_REQ_KEY = "hookify_beta_signups";
+export function loadBetaRequests() {
+  try {
+    const raw = localStorage.getItem(BETA_REQ_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (_) { return []; }
+}
+
 // Templates localStorage helper — used by Upload flow to read the "active" template.
 const ACTIVE_TEMPLATE_KEY = "hookify_active_template";
 export function setActiveTemplate(tpl) {

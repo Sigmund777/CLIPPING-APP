@@ -1,7 +1,7 @@
 import React from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
-import { Sparkles, LayoutGrid, Upload, Scissors, Settings, LogOut } from "lucide-react";
+import { Sparkles, LayoutGrid, Upload, Scissors, Settings, LogOut, FolderOpen, Inbox } from "lucide-react";
 
 export default function DashboardLayout({ children }) {
   const { user, logout } = useAuth();
@@ -10,8 +10,10 @@ export default function DashboardLayout({ children }) {
   const NAV = [
     { to: "/dashboard", label: "Studio", icon: LayoutGrid },
     { to: "/upload", label: "Upload", icon: Upload },
+    { to: "/workspace", label: "Workspace", icon: FolderOpen },
     { to: "/templates", label: "Templates", icon: Scissors },
     { to: "/settings", label: "Settings", icon: Settings },
+    { to: "/beta-requests", label: "Beta", icon: Inbox },
   ];
 
   return (

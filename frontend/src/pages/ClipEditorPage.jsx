@@ -1,12 +1,16 @@
 import React, { useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import DashboardLayout from "../components/DashboardLayout";
 import api from "../lib/api";
-import { DEMO_TRANSCRIPT, DEMO_SUGGESTIONS, getDemoClipById, getActiveClip, formatTimestamp } from "../lib/mockData";
+import {
+  DEMO_TRANSCRIPT, DEMO_SUGGESTIONS, getDemoClipById, getActiveClip,
+  setActiveClip, formatTimestamp, saveClip, CLIP_STATUSES, PLATFORM_OPTIONS,
+  CAPTION_STYLE_OPTIONS,
+} from "../lib/mockData";
 import { toast } from "sonner";
 import {
   ArrowLeft, Download, Play, Pause, Wand2, RefreshCw, Type,
-  Zap, MessageSquare, Clock, FileVideo, Lightbulb, Sparkles,
+  Zap, MessageSquare, Clock, FileVideo, Lightbulb, Sparkles, Save,
 } from "lucide-react";
 
 const CAPTION_STYLES = ["Bold-Yellow", "Subtitled", "Karaoke", "Minimal", "Big Mood", "Beast", "Cinema"];
@@ -39,20 +43,36 @@ function VerticalPreview({ caption, onTogglePlay, playing }) {
 
 export default function ClipEditorPage() {
   const { clipId } = useParams();
+  const nav = useNavigate();
   const [clip, setClip] = useState(null);
-  const [activeClip, setActiveClipState] = useState(null); // AI-suggestion context from upload flow
+  const [activeClip, setActiveClipState] = useState(null);
   const [transcript, setTranscript] = useState(null);
   const [suggestions, setSuggestions] = useState(null);
   const [activeTitle, setActiveTitle] = useState(0);
   const [captionStyle, setCaptionStyle] = useState("Bold-Yellow");
   const [playing, setPlaying] = useState(false);
-  const [exporting, setExporting] = useState(false);
+
+  // Editable fields (seeded from activeClip when available)
+  const [editTitle, setEditTitle] = useState("");
+  const [editHook, setEditHook] = useState("");
+  const [editCaption, setEditCaption] = useState("");
+  const [editPlatform, setEditPlatform] = useState("TikTok");
+  const [editStatus, setEditStatus] = useState("Idea");
+  const [noClipSelected, setNoClipSelected] = useState(false);
 
   useEffect(() => {
-    // Pick up the selected suggestion (real AI or sample) from localStorage if present.
     const stashed = getActiveClip();
+    if (!clipId || clipId === "none") {
+      if (!stashed) setNoClipSelected(true);
+      return;
+    }
     if (stashed && stashed.id === clipId) {
       setActiveClipState(stashed);
+      setEditTitle(stashed.title || "");
+      setEditHook(stashed.hook || "");
+      setEditCaption(stashed.caption_text || "");
+      setEditPlatform(stashed.platform || "TikTok");
+      setEditStatus(stashed.status || "Idea");
       if (stashed.caption_style) setCaptionStyle(stashed.caption_style);
     }
   }, [clipId]);
@@ -106,6 +126,43 @@ export default function ClipEditorPage() {
     toast.info("Export coming soon", { description: "Full 1080p 9:16 export with burnt captions ships in the next beta wave." });
   };
 
+  const handleSaveClip = () => {
+    if (!activeClip) {
+      toast.error("No clip to save", { description: "Open an idea from your upload first." });
+      return;
+    }
+    const merged = {
+      ...activeClip,
+      title: editTitle || activeClip.title,
+      hook: editHook,
+      caption_text: editCaption,
+      caption_style: captionStyle,
+      platform: editPlatform,
+      status: editStatus,
+    };
+    saveClip(merged);
+    setActiveClip(merged);
+    setActiveClipState(merged);
+    toast.success("Clip saved", { description: "Find it in your Workspace on the dashboard." });
+  };
+
+  if (noClipSelected) {
+    return (
+      <DashboardLayout>
+        <div className="px-6 lg:px-10 py-20 max-w-xl mx-auto text-center" data-testid="editor-empty">
+          <div className="w-14 h-14 rounded-md bg-volt/10 border border-volt/20 flex items-center justify-center mx-auto mb-5">
+            <Sparkles className="w-6 h-6 text-volt" />
+          </div>
+          <h1 className="font-heading text-3xl font-medium tracking-tight">No clip selected yet.</h1>
+          <p className="mt-2 text-sm text-zinc-400">Upload a video on the Upload page — we'll surface 3–5 clip ideas you can open here to edit and save.</p>
+          <button onClick={() => nav("/upload")} className="mt-6 inline-flex items-center gap-2 bg-volt text-black font-medium px-5 py-2.5 rounded-md hover:bg-volt-300 transition-colors text-sm" data-testid="editor-empty-upload">
+            Go to upload
+          </button>
+        </div>
+      </DashboardLayout>
+    );
+  }
+
   if (!clip) return <DashboardLayout><div className="p-10 text-zinc-500">Loading clip…</div></DashboardLayout>;
 
   const currentTitle = suggestions?.viral_titles?.[activeTitle] || clip.title;
@@ -140,51 +197,98 @@ export default function ClipEditorPage() {
         </div>
 
         {activeClip && (
-          <div className="mb-6 grid grid-cols-1 lg:grid-cols-[1fr_auto] gap-4 bg-ink-900 border border-volt/20 rounded-lg p-5" data-testid="ai-suggestion-panel">
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 flex-wrap text-[11px]">
-                <span className="inline-flex items-center gap-1.5 bg-ink-950 border border-white/10 rounded-full px-2.5 py-1 font-mono text-zinc-400">
-                  <FileVideo className="w-3 h-3" /> <span data-testid="ai-source-filename">{activeClip.source_filename}</span>
-                </span>
-                <span className="inline-flex items-center gap-1.5 bg-ink-950 border border-white/10 rounded-full px-2.5 py-1 font-mono text-zinc-400">
-                  <Clock className="w-3 h-3" /> {formatTimestamp(activeClip.start_seconds || 0)} → {formatTimestamp(activeClip.end_seconds || 0)} · {activeClip.duration_seconds || 0}s
-                </span>
+          <div className="mb-6 bg-ink-900 border border-volt/20 rounded-lg p-5 space-y-5" data-testid="ai-suggestion-panel">
+            <div className="flex items-center gap-2 flex-wrap text-[11px]">
+              <span className="inline-flex items-center gap-1.5 bg-ink-950 border border-white/10 rounded-full px-2.5 py-1 font-mono text-zinc-400">
+                <FileVideo className="w-3 h-3" /> <span data-testid="ai-source-filename">{activeClip.source_filename}</span>
+              </span>
+              <span className="inline-flex items-center gap-1.5 bg-ink-950 border border-white/10 rounded-full px-2.5 py-1 font-mono text-zinc-400">
+                <Clock className="w-3 h-3" /> {formatTimestamp(activeClip.start_seconds || 0)} → {formatTimestamp(activeClip.end_seconds || 0)} · {activeClip.duration_seconds || 0}s
+              </span>
+              {typeof activeClip.confidence === "number" && (
                 <span className="inline-flex items-center gap-1.5 bg-volt/10 border border-volt/30 rounded-full px-2.5 py-1 text-volt">
-                  <span className="w-1.5 h-1.5 rounded-full bg-volt" /> {activeClip.platform || "TikTok"}
+                  <Zap className="w-3 h-3" /> Confidence {activeClip.confidence}%
                 </span>
-                {typeof activeClip.confidence === "number" && (
-                  <span className="inline-flex items-center gap-1.5 bg-volt/10 border border-volt/30 rounded-full px-2.5 py-1 text-volt">
-                    <Zap className="w-3 h-3" /> Confidence {activeClip.confidence}%
-                  </span>
-                )}
+              )}
+              <span className="ml-auto inline-flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-zinc-500 font-bold">
+                <Lightbulb className="w-3 h-3 text-volt" /> {activeClip.mode === "real_ai" ? "Live AI · Whisper + Claude" : "Sample data"}
+              </span>
+            </div>
+
+            {/* ----- editable form ----- */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="md:col-span-2">
+                <label className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 mb-1.5 block">Title</label>
+                <input
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="w-full bg-ink-950 border border-white/10 rounded-md px-3 py-2.5 text-sm focus:border-volt focus:outline-none"
+                  data-testid="edit-title"
+                />
               </div>
 
-              {activeClip.hook && (
-                <div>
-                  <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 mb-1 flex items-center gap-1.5"><Wand2 className="w-3 h-3 text-volt" /> Hook</div>
-                  <p className="text-sm text-zinc-200" data-testid="ai-hook">{activeClip.hook}</p>
-                </div>
-              )}
+              <div className="md:col-span-2">
+                <label className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 mb-1.5 flex items-center gap-1.5"><Wand2 className="w-3 h-3 text-volt" /> Hook</label>
+                <input
+                  value={editHook}
+                  onChange={(e) => setEditHook(e.target.value)}
+                  className="w-full bg-ink-950 border border-white/10 rounded-md px-3 py-2.5 text-sm focus:border-volt focus:outline-none"
+                  data-testid="edit-hook"
+                />
+              </div>
 
-              {activeClip.caption_text && (
-                <div>
-                  <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 mb-1.5 flex items-center gap-1.5">
-                    <MessageSquare className="w-3 h-3 text-volt" /> Caption · <span className="text-volt">{activeClip.caption_style || "Bold"}</span> style
-                  </div>
-                  <div className="text-xs text-zinc-300 bg-ink-950 border border-white/5 rounded-md p-3 whitespace-pre-line leading-relaxed max-w-xl" data-testid="ai-caption">{activeClip.caption_text}</div>
-                </div>
-              )}
+              <div className="md:col-span-2">
+                <label className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 mb-1.5 flex items-center gap-1.5"><MessageSquare className="w-3 h-3 text-volt" /> Caption · {captionStyle} style</label>
+                <textarea
+                  value={editCaption}
+                  onChange={(e) => setEditCaption(e.target.value)}
+                  rows={4}
+                  className="w-full bg-ink-950 border border-white/10 rounded-md px-3 py-2.5 text-sm focus:border-volt focus:outline-none resize-none font-mono whitespace-pre-line"
+                  data-testid="edit-caption"
+                />
+              </div>
 
-              {activeClip.reason && (
-                <div className="text-[11px] text-zinc-500 border-l-2 border-volt/30 pl-3 max-w-xl" data-testid="ai-reason">
-                  <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 mr-2">Why this moment</span>
-                  {activeClip.reason}
-                </div>
-              )}
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 mb-1.5 block">Platform</label>
+                <select
+                  value={editPlatform}
+                  onChange={(e) => setEditPlatform(e.target.value)}
+                  className="w-full bg-ink-950 border border-white/10 rounded-md px-3 py-2.5 text-sm focus:border-volt focus:outline-none"
+                  data-testid="edit-platform"
+                >
+                  {PLATFORM_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 mb-1.5 block">Status</label>
+                <select
+                  value={editStatus}
+                  onChange={(e) => setEditStatus(e.target.value)}
+                  className="w-full bg-ink-950 border border-white/10 rounded-md px-3 py-2.5 text-sm focus:border-volt focus:outline-none"
+                  data-testid="edit-status"
+                >
+                  {CLIP_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
             </div>
-            <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 font-bold lg:text-right whitespace-nowrap flex lg:flex-col items-center lg:items-end gap-2">
-              <Lightbulb className="w-3.5 h-3.5 text-volt" />
-              <span>{activeClip.mode === "real_ai" ? "Live AI · Whisper + Claude" : "Sample data"}</span>
+
+            {activeClip.reason && (
+              <div className="text-[11px] text-zinc-500 border-l-2 border-volt/30 pl-3" data-testid="ai-reason">
+                <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500 mr-2">Why this moment</span>
+                {activeClip.reason}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-2 border-t border-white/5">
+              <span className="text-[11px] text-zinc-500">Edits save locally to your Workspace.</span>
+              <button
+                onClick={handleSaveClip}
+                className="inline-flex items-center gap-2 bg-volt text-black font-medium px-4 py-2 rounded-md hover:bg-volt-300 transition-colors text-sm"
+                data-testid="save-clip-btn"
+              >
+                <Save className="w-3.5 h-3.5" /> Save clip
+              </button>
             </div>
           </div>
         )}
@@ -260,16 +364,37 @@ export default function ClipEditorPage() {
             <div className="bg-ink-900 border border-white/5 rounded-lg p-5">
               <div className="text-xs font-bold uppercase tracking-[0.2em] text-volt mb-3">More viral moments</div>
               <div className="space-y-2.5">
-                {suggestions?.clips?.slice(0, 3).map((c, i) => (
-                  <div key={i} className="p-3 rounded-md bg-ink-950 border border-white/5 hover:border-volt/30 transition-colors cursor-pointer" data-testid={`suggestion-${i}`}>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <div className="font-mono text-[10px] text-zinc-500">{c.start.toFixed(0)}s – {c.end.toFixed(0)}s</div>
-                      <div className="font-mono text-[10px] text-volt">{c.score}/100</div>
+                {suggestions?.clips?.slice(0, 3).map((c, i) => {
+                  const start = typeof c.start_seconds === "number" ? c.start_seconds : (c.start || 0);
+                  const end = typeof c.end_seconds === "number" ? c.end_seconds : (c.end || 0);
+                  const label = c.platform || c.caption_style || `${Math.max(0, Math.round(end - start))}s`;
+                  return (
+                    <div
+                      key={c.id || i}
+                      className="p-3 rounded-md bg-ink-950 border border-white/5 hover:border-volt/30 transition-colors cursor-pointer"
+                      data-testid={`suggestion-${i}`}
+                      onClick={() => {
+                        setActiveClip({
+                          ...c,
+                          start_seconds: start,
+                          end_seconds: end,
+                          duration_seconds: c.duration_seconds || Math.max(0, Math.round(end - start)),
+                          source_filename: activeClip?.source_filename || clip?.source_video || "demo-source.mp4",
+                          mode: activeClip?.mode || "demo",
+                        });
+                        toast("Loaded into editor", { description: c.title });
+                        nav(`/clip/${c.id || `gen-${i}`}`);
+                      }}
+                    >
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="font-mono text-[10px] text-zinc-500">{Math.round(start)}s – {Math.round(end)}s</div>
+                        <div className="font-mono text-[10px] text-volt">{label}</div>
+                      </div>
+                      <div className="text-xs font-medium leading-snug">{c.title}</div>
+                      {c.reason && <div className="text-[11px] text-zinc-500 mt-1">{c.reason}</div>}
                     </div>
-                    <div className="text-xs font-medium leading-snug">{c.title}</div>
-                    <div className="text-[11px] text-zinc-500 mt-1">{c.reason}</div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>

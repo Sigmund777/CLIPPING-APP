@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "../components/DashboardLayout";
-import { DEMO_TEMPLATES, setActiveTemplate } from "../lib/mockData";
-import { Sparkles, ArrowRight, Wand2, MessageSquare, Gauge, Quote, Check } from "lucide-react";
+import { DEMO_TEMPLATES, setActiveTemplate, clearActiveTemplate } from "../lib/mockData";
+import { Sparkles, ArrowRight, Wand2, MessageSquare, Gauge, Quote, Check, X } from "lucide-react";
 import { toast } from "sonner";
 
 const ACCENT_DOTS = {
@@ -91,6 +91,14 @@ export default function TemplatesPage() {
     setTimeout(() => nav("/upload"), 700);
   };
 
+  const handleClear = () => {
+    clearActiveTemplate();
+    setActiveId(null);
+    toast("Active template cleared");
+  };
+
+  const activeTpl = DEMO_TEMPLATES.find((t) => t.id === activeId);
+
   return (
     <DashboardLayout>
       <div className="px-6 lg:px-10 py-10 max-w-6xl mx-auto" data-testid="templates-page">
@@ -105,6 +113,20 @@ export default function TemplatesPage() {
           <p className="mt-2 text-sm text-zinc-400 max-w-2xl leading-relaxed">
             Pick a structure that matches the content you're making. We'll apply the hook style, caption style and pacing to your next upload's clip ideas.
           </p>
+
+          {activeTpl && (
+            <div className="mt-5 inline-flex items-center gap-3 bg-volt/5 border border-volt/30 rounded-full pl-3 pr-1.5 py-1.5" data-testid="active-template-pill">
+              <Sparkles className="w-3.5 h-3.5 text-volt" />
+              <span className="text-xs text-volt">Active: <span className="font-medium">{activeTpl.name}</span></span>
+              <button
+                onClick={handleClear}
+                className="inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.18em] font-bold text-volt bg-volt/10 hover:bg-volt/20 border border-volt/30 rounded-full px-2.5 py-1 transition-colors"
+                data-testid="clear-active-template"
+              >
+                <X className="w-3 h-3" /> Clear
+              </button>
+            </div>
+          )}
         </header>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
