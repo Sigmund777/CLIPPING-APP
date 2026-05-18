@@ -57,6 +57,21 @@ function HideDevOverlay() {
   }, []);
   return null;
 }
+function AuthListener() {
+  const { supabase } = useAuth();
+
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_IN') {
+        window.location.reload();
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [supabase]);
+
+  return null;
+}
 
 export default function App() {
   return (
@@ -64,6 +79,7 @@ export default function App() {
       <AuthProvider>
         <BrowserRouter>
           <HideDevOverlay />
+    <AuthListener />
           <Toaster theme="dark" position="bottom-right" toastOptions={{ className: "font-body" }} />
           <Routes>
             <Route path="/" element={<LandingPage />} />
