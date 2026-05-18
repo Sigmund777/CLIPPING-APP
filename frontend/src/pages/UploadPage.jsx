@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import DashboardLayout from "../components/DashboardLayout";
 import api, { formatApiErrorDetail } from "../lib/api";
+import { supabase, SOURCES_BUCKET } from "../lib/supabase";
+import { useAuth } from "../lib/auth";
 import {
   DEMO_GENERATED_CLIPS, formatTimestamp,
   getActiveTemplate, clearActiveTemplate, loadSettings, setActiveClip,
@@ -14,7 +16,7 @@ import { toast } from "sonner";
 
 // Stage definitions — order matches the beta processing pipeline.
 const STAGES = [
-  { id: "uploading",    label: "Uploading",            hint: "Securely streaming your file to our pipeline." },
+  { id: "uploading",    label: "Uploading",            hint: "Securely streaming your file to your private storage bucket." },
   { id: "extracting",   label: "Extracting audio",     hint: "Pulling the audio track for transcription." },
   { id: "transcribing", label: "Transcribing",         hint: "Whisper is reading your audio word-by-word." },
   { id: "finding",      label: "Finding clip moments", hint: "Scoring beats against retention patterns." },
@@ -22,8 +24,36 @@ const STAGES = [
   { id: "ready",        label: "Complete",             hint: "Suggestions are below." },
 ];
 
-const MAX_REAL_AI_BYTES = 25 * 1024 * 1024; // 25 MB matches backend Whisper limit
+const MAX_BYTES = 500 * 1024 * 1024;            // 500 MB cap on direct-to-storage upload
+const ANALYZE_BYTES = 100 * 1024 * 1024;        // 100 MB cap on what backend will analyze
 const REAL_AI_EXTS = ["mp4", "mov", "mp3", "wav", "m4a", "webm"];
+
+// Upload a file to Supabase Storage with XHR so we can track progress.
+// Uses the user's access token to satisfy the bucket's RLS policy.
+async function uploadWithProgress(file, key, onProgress) {
+  const { data: sess } = await supabase.auth.getSession();
+  const token = sess?.session?.access_token;
+  if (!token) throw new Error("Not authenticated");
+  const url = `${process.env.REACT_APP_SUPABASE_URL}/storage/v1/object/${SOURCES_BUCKET}/${encodeURI(key)}`;
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url, true);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.setRequestHeader("x-upsert", "true");
+    xhr.setRequestHeader("Content-Type", file.type || "video/mp4");
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error(`Upload failed (${xhr.status}): ${xhr.responseText?.slice(0, 200)}`));
+    };
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.send(file);
+  });
+}
 
 function Stage({ s, current, done, progress }) {
   const isCurrent = s.id === current;
@@ -155,8 +185,10 @@ export default function UploadPage() {
     toast.success("Sample clip ideas ready", { description: "Demo data — connect a real file for AI analysis." });
   };
 
+  const { user } = useAuth();
+
   // --------------------------------------------------------------------------
-  // REAL AI MODE — Whisper + Claude Sonnet 4.5 via backend.
+  // REAL AI MODE — direct-to-Supabase upload, then backend transcribes + suggests.
   // --------------------------------------------------------------------------
   const startRealAI = async (selectedFile) => {
     // Frontend validation
@@ -165,8 +197,16 @@ export default function UploadPage() {
       toast.error(`Unsupported format ".${ext}"`, { description: "Use mp4, mov, mp3, wav, or m4a." });
       return;
     }
-    if (selectedFile.size > MAX_REAL_AI_BYTES) {
-      toast.error("File too large", { description: "The MVP limit is 25 MB. Trim or compress and try again." });
+    if (selectedFile.size > MAX_BYTES) {
+      toast.error("File too large", { description: "Max upload size is 500 MB." });
+      return;
+    }
+    if (selectedFile.size > ANALYZE_BYTES) {
+      toast.error("Too large to analyze", { description: "Whisper accepts files up to 100 MB. Trim and try again." });
+      return;
+    }
+    if (!user?.id) {
+      toast.error("You're not signed in.");
       return;
     }
 
@@ -177,48 +217,52 @@ export default function UploadPage() {
     setStage("uploading");
     setProgress(0);
 
-    const earlyAnim = animateProgressTo(35, 700);
-    const form = new FormData();
-    form.append("file", selectedFile);
+    // 1. Upload directly to Supabase Storage (bypasses Vercel's 4.5 MB body limit).
+    const safeName = `${Date.now()}-${(selectedFile.name || "video").replace(/[^A-Za-z0-9._-]+/g, "-")}`;
+    const sourceKey = `${user.id}/${safeName}`;
 
-    // Drive UI stages on a timer so the user sees progress even while Whisper/Claude runs.
+    try {
+      // The supabase-js v2 client does not currently expose progress on .upload().
+      // We use the underlying fetch via signed URL OR we wrap with a manual XHR.
+      await uploadWithProgress(selectedFile, sourceKey, (pct) => {
+        setProgress(Math.min(35, Math.round(pct * 0.35)));
+      });
+    } catch (err) {
+      setErrorMsg("Upload failed: " + (err?.message || "unknown error"));
+      toast.error("Upload failed", { description: err?.message || "Please retry." });
+      setStage(null);
+      return;
+    }
+
+    // 2. Drive UI stages while the backend analyzes.
     let stageTimers = [];
     const runStageProgression = () => {
-      stageTimers.push(setTimeout(() => setStage("extracting"), 0));
-      stageTimers.push(setTimeout(() => setStage("transcribing"), 3500));
-      stageTimers.push(setTimeout(() => setStage("finding"), 11000));
-      stageTimers.push(setTimeout(() => setStage("hooks"), 20000));
+      stageTimers.push(setTimeout(() => { setStage("extracting"); setProgress(45); }, 0));
+      stageTimers.push(setTimeout(() => { setStage("transcribing"); setProgress(60); }, 3500));
+      stageTimers.push(setTimeout(() => { setStage("finding"); setProgress(78); }, 11000));
+      stageTimers.push(setTimeout(() => { setStage("hooks"); setProgress(90); }, 20000));
     };
+    runStageProgression();
 
+    // 3. Call backend analyze with the source_key.
     let response;
     try {
-      // Wait for the initial progress animation to feel real.
-      await earlyAnim;
-      // Kick off the real analyze call.
-      const analyzePromise = api.post("/ai/analyze", form, {
-        headers: { "Content-Type": "multipart/form-data" },
-        timeout: 180000, // 3 min ceiling
-        onUploadProgress: (e) => {
-          if (e.total) {
-            const pct = Math.round((e.loaded / e.total) * 100);
-            setProgress((p) => Math.max(p, Math.min(90, 35 + Math.round(pct * 0.55))));
-          }
-        },
-      });
-      runStageProgression();
-      response = await analyzePromise;
+      response = await api.post("/ai/analyze", {
+        source_key: sourceKey,
+        filename: selectedFile.name,
+        content_type: selectedFile.type || "video/mp4",
+      }, { timeout: 240000 });
       await animateProgressTo(100, 400);
     } catch (err) {
       stageTimers.forEach(clearTimeout);
       const detail = formatApiErrorDetail(err?.response?.data?.detail) || err?.message || "Live AI processing could not complete.";
       setErrorMsg(detail);
       setResultMode("demo");
-      toast.error("Live AI processing", { description: "Not connected in this beta build yet. Showing sample clip ideas for now." });
+      toast.error("AI analysis failed", { description: detail });
       setStage("ready");
       setResults(DEMO_GENERATED_CLIPS.slice(0, 3));
       return;
     }
-
     stageTimers.forEach(clearTimeout);
 
     const data = response?.data || {};
@@ -314,8 +358,8 @@ export default function UploadPage() {
         {!stage && (
           <>
             <h1 className="font-heading text-3xl sm:text-4xl font-medium tracking-tight">Upload your long-form.</h1>
-            <p className="mt-2 text-sm text-zinc-400 max-w-xl">
-              Drop an mp4, mov, mp3, wav or m4a (max 25 MB) and Hookify will transcribe it with Whisper and surface 3–5 real clip ideas using Claude Sonnet 4.5. Full export pipeline is coming soon.
+              <p className="mt-2 text-sm text-zinc-400 max-w-xl">
+              Drop an mp4, mov, mp3, wav, m4a or webm (max 100 MB) and Hookify will transcribe it with Whisper and surface 3–5 real clip ideas using Claude Sonnet 4.5. Then "Generate clip" renders a downloadable 9:16 MP4 with burnt captions.
             </p>
 
             {/* Active template / settings hint card */}

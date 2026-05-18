@@ -1,325 +1,117 @@
+"""
+Hookify AI — FastAPI backend.
+
+Auth: Supabase (verified via Supabase.auth.get_user using the user's access token).
+DB:   Supabase Postgres (via supabase-py client with the service-role key).
+Storage: Supabase Storage (hookify-sources, hookify-renders) — service-role for backend ops.
+Render: FFmpeg subprocess, source/output staged through Supabase Storage.
+"""
+
 from dotenv import load_dotenv
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR / ".env")
 
 import os
-import logging
-import uuid
-import secrets
-import bcrypt
-import jwt
-import requests
-import json
 import re
+import json
+import uuid
 import asyncio
+import logging
 import tempfile
 import shutil
 import subprocess
 from io import BytesIO
-from datetime import datetime, timezone, timedelta
-from typing import Optional, List
+from datetime import datetime, timezone
+from typing import Optional
 
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File, Header, Query, BackgroundTasks
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File, Header
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 
-# Emergent integrations — used for Whisper (audio→text) and Claude Sonnet 4.5 (text→clip ideas)
+from supabase import create_client, Client
 from emergentintegrations.llm.openai import OpenAISpeechToText
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
-# ---------- ENV / DB ----------
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
-
-JWT_SECRET = os.environ['JWT_SECRET']
-JWT_ALGORITHM = "HS256"
-APP_NAME = os.environ.get("APP_NAME", "clipforge")
-
-STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
+# ---------- ENV ----------
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+SUPABASE_ANON_KEY = os.environ["SUPABASE_ANON_KEY"]
 EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
-storage_key = None
+SOURCES_BUCKET = os.environ.get("SOURCES_BUCKET", "hookify-sources")
+RENDERS_BUCKET = os.environ.get("RENDERS_BUCKET", "hookify-renders")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("hookify")
 
-# ---------- APP ----------
-app = FastAPI(title="ClipForge AI API")
+# ---------- CLIENTS ----------
+sb_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+# A second client used purely for verifying user tokens (auth.get_user).
+sb_anon: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+app = FastAPI(title="Hookify AI API")
 api_router = APIRouter(prefix="/api")
 
 
-# ---------- HELPERS ----------
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-def verify_password(plain: str, hashed: str) -> bool:
-    return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
-
-def create_access_token(user_id: str, email: str) -> str:
-    return jwt.encode({"sub": user_id, "email": email, "exp": datetime.now(timezone.utc) + timedelta(minutes=60), "type": "access"}, JWT_SECRET, algorithm=JWT_ALGORITHM)
-
-def create_refresh_token(user_id: str) -> str:
-    return jwt.encode({"sub": user_id, "exp": datetime.now(timezone.utc) + timedelta(days=7), "type": "refresh"}, JWT_SECRET, algorithm=JWT_ALGORITHM)
-
-def set_auth_cookies(response: Response, access: str, refresh: str):
-    response.set_cookie("access_token", access, httponly=True, secure=False, samesite="lax", max_age=3600, path="/")
-    response.set_cookie("refresh_token", refresh, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
-
-def clear_auth_cookies(response: Response):
-    response.delete_cookie("access_token", path="/")
-    response.delete_cookie("refresh_token", path="/")
-
-async def get_current_user(request: Request) -> dict:
-    token = request.cookies.get("access_token")
-    if not token:
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            token = auth[7:]
-    if not token:
+# ---------- AUTH DEPENDENCY ----------
+async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
+    """Verify the Supabase access token attached as `Authorization: Bearer <jwt>`."""
+    if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Not authenticated")
+    token = authorization[7:]
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        if payload.get("type") != "access":
-            raise HTTPException(status_code=401, detail="Invalid token type")
-        user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
-        if not user:
-            raise HTTPException(status_code=401, detail="User not found")
-        return user
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-
-def init_storage():
-    global storage_key
-    if storage_key:
-        return storage_key
-    try:
-        resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-        resp.raise_for_status()
-        storage_key = resp.json()["storage_key"]
-        return storage_key
-    except Exception as e:
-        logger.error(f"Storage init failed: {e}")
-        return None
-
-
-def put_object(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    if not key:
-        raise HTTPException(status_code=500, detail="Storage unavailable")
-    resp = requests.put(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=300)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def get_object(path: str) -> tuple:
-    key = init_storage()
-    if not key:
-        raise HTTPException(status_code=500, detail="Storage unavailable")
-    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=120)
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
-
-
-# ---------- MODELS ----------
-class RegisterIn(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=6)
-    name: str = Field(min_length=1)
-
-class LoginIn(BaseModel):
-    email: EmailStr
-    password: str
-
-class GoogleAuthIn(BaseModel):
-    email: EmailStr
-    name: str
-    avatar: Optional[str] = None
-
-class ClipCreateIn(BaseModel):
-    title: str
-    source_video_id: Optional[str] = None
-    duration_seconds: Optional[int] = 60
-
-class ClipUpdateIn(BaseModel):
-    title: Optional[str] = None
-    caption_style: Optional[str] = None
-    is_exported: Optional[bool] = None
-
-
-# ---------- MOCK AI DATA ----------
-MOCK_TRANSCRIPT_SEGMENTS = [
-    {"start": 0.0, "end": 4.2, "text": "What if I told you that the single biggest mistake creators make..."},
-    {"start": 4.2, "end": 8.5, "text": "is treating short-form like a shrunken version of their long-form content."},
-    {"start": 8.5, "end": 12.8, "text": "Algorithms reward emotional density in the first three seconds."},
-    {"start": 12.8, "end": 17.4, "text": "If your hook doesn't slap, your video is dead on arrival."},
-    {"start": 17.4, "end": 22.1, "text": "Here are the three patterns that consistently break a million views."},
-    {"start": 22.1, "end": 27.6, "text": "Pattern one: open with a contradiction the viewer can't ignore."},
-    {"start": 27.6, "end": 33.0, "text": "Pattern two: use motion in the first frame, never a static shot."},
-    {"start": 33.0, "end": 38.9, "text": "Pattern three: end on a question that pulls them straight back to the start."},
-]
-
-MOCK_CLIP_SUGGESTIONS = [
-    {"start": 0.0, "end": 38.9, "score": 96, "reason": "Strong hook with pattern-interrupt opening", "title": "The 3 hooks that broke a million views"},
-    {"start": 17.4, "end": 55.0, "score": 89, "reason": "Clear value list, high retention curve", "title": "Three viral patterns creators sleep on"},
-    {"start": 27.6, "end": 62.5, "score": 84, "reason": "Specific tactical advice, save-worthy", "title": "Never start your Reel with a static shot"},
-    {"start": 41.0, "end": 78.4, "score": 78, "reason": "Curiosity loop ending, drives loops", "title": "Why your Reels die in the first 2 seconds"},
-]
-
-MOCK_TITLE_HOOKS = [
-    "POV: You finally cracked the YouTube Shorts algorithm",
-    "The 3-second rule that 10x'd my Reels",
-    "Stop posting until you watch this",
-    "Why your podcast clips aren't going viral (yet)",
-    "This editing pattern hit 4M views in 12 hours",
-    "Streamers, you're leaving views on the table",
-]
-
-
-# ---------- AUTH ROUTES ----------
-@api_router.post("/auth/register")
-async def register(payload: RegisterIn, response: Response):
-    email = payload.email.lower()
-    if await db.users.find_one({"email": email}):
-        raise HTTPException(status_code=400, detail="Email already registered")
-    user_id = str(uuid.uuid4())
-    user = {
-        "id": user_id,
-        "email": email,
-        "name": payload.name,
-        "password_hash": hash_password(payload.password),
-        "role": "user",
-        "plan": "free",
-        "avatar": None,
-        "provider": "email",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.users.insert_one(user)
-    access = create_access_token(user_id, email)
-    refresh = create_refresh_token(user_id)
-    set_auth_cookies(response, access, refresh)
-    return {"id": user_id, "email": email, "name": payload.name, "role": "user", "plan": "free", "avatar": None}
-
-
-@api_router.post("/auth/login")
-async def login(payload: LoginIn, response: Response):
-    email = payload.email.lower()
-    user = await db.users.find_one({"email": email})
-    if not user or not verify_password(payload.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    access = create_access_token(user["id"], email)
-    refresh = create_refresh_token(user["id"])
-    set_auth_cookies(response, access, refresh)
-    return {"id": user["id"], "email": user["email"], "name": user["name"], "role": user.get("role", "user"), "plan": user.get("plan", "free"), "avatar": user.get("avatar")}
-
-
-@api_router.post("/auth/google")
-async def google_auth(payload: GoogleAuthIn, response: Response):
-    """Emergent-managed Google Auth — simplified flow for v1. Frontend posts user profile after social pop-up."""
-    email = payload.email.lower()
-    user = await db.users.find_one({"email": email})
-    if not user:
-        user_id = str(uuid.uuid4())
-        user = {
-            "id": user_id,
-            "email": email,
-            "name": payload.name,
-            "password_hash": hash_password(secrets.token_urlsafe(32)),
-            "role": "user",
-            "plan": "free",
-            "avatar": payload.avatar,
-            "provider": "google",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+        # supabase-py: pass the token to .auth.get_user which validates against /auth/v1/user.
+        resp = sb_anon.auth.get_user(token)
+        if not resp or not getattr(resp, "user", None):
+            raise HTTPException(status_code=401, detail="Invalid token")
+        u = resp.user
+        return {
+            "id": u.id,
+            "email": u.email,
+            "name": (u.user_metadata or {}).get("name") or (u.email.split("@")[0] if u.email else "Creator"),
+            "avatar": (u.user_metadata or {}).get("avatar_url"),
         }
-        await db.users.insert_one(user)
-    access = create_access_token(user["id"], email)
-    refresh = create_refresh_token(user["id"])
-    set_auth_cookies(response, access, refresh)
-    return {"id": user["id"], "email": user["email"], "name": user["name"], "role": user.get("role", "user"), "plan": user.get("plan", "free"), "avatar": user.get("avatar")}
-
-
-@api_router.post("/auth/logout")
-async def logout(response: Response, user: dict = Depends(get_current_user)):
-    clear_auth_cookies(response)
-    return {"ok": True}
-
-
-@api_router.get("/auth/me")
-async def me(user: dict = Depends(get_current_user)):
-    return user
-
-
-# ---------- VIDEO + CLIPS ----------
-@api_router.post("/videos/upload")
-async def upload_video(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
-    ext = file.filename.split(".")[-1].lower() if "." in file.filename else "mp4"
-    if ext not in ("mp4", "mov", "webm", "mkv", "m4v"):
-        raise HTTPException(status_code=400, detail="Unsupported video format")
-    video_id = str(uuid.uuid4())
-    path = f"{APP_NAME}/uploads/{user['id']}/{video_id}.{ext}"
-    data = await file.read()
-    if len(data) > 500 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="File too large (max 500MB)")
-    try:
-        result = put_object(path, data, file.content_type or "video/mp4")
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Upload failed: {e}")
-        raise HTTPException(status_code=500, detail="Upload failed")
-    doc = {
-        "id": video_id,
-        "user_id": user["id"],
-        "storage_path": result["path"],
-        "original_filename": file.filename,
-        "content_type": file.content_type,
-        "size": result.get("size", len(data)),
-        "duration_seconds": 600,
-        "is_deleted": False,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.videos.insert_one(doc)
-    return {"id": video_id, "original_filename": file.filename, "size": doc["size"]}
+        logger.warning(f"Token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
 
 
-@api_router.get("/videos/{video_id}/stream")
-async def stream_video(video_id: str, auth: Optional[str] = Query(None), authorization: Optional[str] = Header(None)):
-    token = None
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization[7:]
-    elif auth:
-        token = auth
-    if not token:
-        raise HTTPException(status_code=401, detail="Auth required")
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        user_id = payload["sub"]
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    video = await db.videos.find_one({"id": video_id, "user_id": user_id, "is_deleted": False}, {"_id": 0})
-    if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
-    data, ct = get_object(video["storage_path"])
-    return Response(content=data, media_type=video.get("content_type") or ct)
+# ---------- HELPERS ----------
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-@api_router.post("/ai/transcript")
-async def gen_transcript(body: dict, user: dict = Depends(get_current_user)):
-    """Mocked transcript generation."""
-    return {"segments": MOCK_TRANSCRIPT_SEGMENTS, "language": "en"}
+def _safe_str(v, default=""):
+    return str(v).strip() if v is not None else default
 
 
-@api_router.post("/ai/suggestions")
-async def gen_suggestions(body: dict, user: dict = Depends(get_current_user)):
-    """Mocked AI clip suggestions."""
-    return {"clips": MOCK_CLIP_SUGGESTIONS, "viral_titles": MOCK_TITLE_HOOKS}
+# ---------- STORAGE HELPERS ----------
+def storage_download(bucket: str, key: str) -> bytes:
+    return sb_admin.storage.from_(bucket).download(key)
 
 
-# ---------- REAL AI: Whisper + Claude Sonnet 4.5 ----------
-MAX_ANALYZE_BYTES = 25 * 1024 * 1024  # 25MB — matches Whisper file-size limit
+def storage_upload(bucket: str, key: str, data: bytes, content_type: str = "video/mp4") -> str:
+    sb_admin.storage.from_(bucket).upload(
+        key,
+        data,
+        {"content-type": content_type, "upsert": "true"},
+    )
+    return key
+
+
+def storage_signed_url(bucket: str, key: str, expires_in: int = 3600) -> str:
+    resp = sb_admin.storage.from_(bucket).create_signed_url(key, expires_in)
+    if isinstance(resp, dict):
+        return resp.get("signedURL") or resp.get("signed_url") or resp.get("signedUrl") or ""
+    return getattr(resp, "signed_url", "") or getattr(resp, "signedURL", "")
+
+
+# ---------- AI ANALYSIS ----------
+MAX_ANALYZE_BYTES = 100 * 1024 * 1024
 ALLOWED_ANALYZE_EXTS = {"mp4", "mov", "mp3", "wav", "m4a", "webm", "mpeg", "mpga"}
 ALLOWED_CAPTION_STYLES = {"Clean", "Bold", "Meme", "Educational"}
 ALLOWED_PLATFORMS = {"TikTok", "YouTube Shorts", "Instagram Reels"}
@@ -348,58 +140,43 @@ Rules:
 - start_seconds and end_seconds MUST come from timestamps you see in the transcript.
 - Confidence is honest: 90+ = strong viral candidate, 70-89 = solid pick, below 70 = decent but optional.
 - Sort suggestions by confidence descending.
-- Return 3 to 5 suggestions, never more, never fewer than 3 — if the source is too short or thin, still return your three best moments.
+- Return 3 to 5 suggestions, never more, never fewer than 3.
 - Do not invent content not present in the transcript."""
 
 
-def _safe_str(v, default=""):
-    return str(v).strip() if v is not None else default
-
-
-def _coerce_suggestion(s, transcript_duration):
-    """Normalise a single suggestion dict so the frontend can render it safely."""
+def _coerce_suggestion(s, duration):
     try:
         start = max(0, int(round(float(s.get("start_seconds", 0)))))
         end = max(start + 1, int(round(float(s.get("end_seconds", start + 30)))))
-        if transcript_duration:
-            end = min(end, int(round(float(transcript_duration))))
-        duration = max(0, end - start)
-        title = _safe_str(s.get("title"))[:80] or "Untitled clip idea"
-        hook = _safe_str(s.get("hook"))[:200] or title
-        caption_text = _safe_str(s.get("caption_text"))[:400] or hook
-        caption_style = _safe_str(s.get("caption_style"), "Bold")
-        if caption_style not in ALLOWED_CAPTION_STYLES:
-            caption_style = "Bold"
-        platform = _safe_str(s.get("platform"), "TikTok")
-        if platform not in ALLOWED_PLATFORMS:
-            platform = "TikTok"
-        confidence = int(round(float(s.get("confidence", 75))))
-        confidence = max(0, min(100, confidence))
-        reason = _safe_str(s.get("reason"))[:240] or "Strong standalone moment with a clear hook."
-        return {
+        if duration:
+            end = min(end, int(round(float(duration))))
+        out = {
             "id": f"real-{uuid.uuid4().hex[:8]}",
             "start_seconds": start,
             "end_seconds": end,
-            "duration_seconds": duration,
-            "title": title,
-            "hook": hook,
-            "caption_text": caption_text,
-            "caption_style": caption_style,
-            "platform": platform,
-            "reason": reason,
-            "confidence": confidence,
+            "duration_seconds": max(0, end - start),
+            "title": (_safe_str(s.get("title"))[:80]) or "Untitled clip idea",
+            "hook": (_safe_str(s.get("hook"))[:200]) or "",
+            "caption_text": (_safe_str(s.get("caption_text"))[:400]) or "",
+            "caption_style": _safe_str(s.get("caption_style"), "Bold"),
+            "platform": _safe_str(s.get("platform"), "TikTok"),
+            "reason": _safe_str(s.get("reason"))[:240] or "Strong standalone moment.",
+            "confidence": max(0, min(100, int(round(float(s.get("confidence", 75)))))),
         }
+        if out["caption_style"] not in ALLOWED_CAPTION_STYLES:
+            out["caption_style"] = "Bold"
+        if out["platform"] not in ALLOWED_PLATFORMS:
+            out["platform"] = "TikTok"
+        return out
     except Exception:
         return None
 
 
 def _extract_json(raw_text):
-    """LLMs sometimes wrap JSON in code fences; strip and parse defensively."""
     txt = raw_text.strip()
     if txt.startswith("```"):
         txt = re.sub(r"^```(?:json)?\s*", "", txt)
         txt = re.sub(r"\s*```$", "", txt)
-    # Fallback: find first { ... last }
     if not txt.startswith("{"):
         m = re.search(r"\{[\s\S]*\}", txt)
         if m:
@@ -407,31 +184,51 @@ def _extract_json(raw_text):
     return json.loads(txt)
 
 
+# ---------- ROUTES: AUTH ECHO ----------
+@api_router.get("/auth/me")
+async def auth_me(user: dict = Depends(get_current_user)):
+    return user
+
+
+# ---------- ROUTES: ANALYZE (upload via storage_key) ----------
+class AnalyzeIn(BaseModel):
+    source_key: str = Field(..., description="Object key in hookify-sources, e.g. <user_id>/<uuid>.mp4")
+    filename: Optional[str] = None
+    content_type: Optional[str] = "video/mp4"
+
+
 @api_router.post("/ai/analyze")
-async def ai_analyze(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
-    """Real AI pipeline: Whisper transcription → Claude Sonnet 4.5 clip suggestions."""
+async def ai_analyze(payload: AnalyzeIn, user: dict = Depends(get_current_user)):
+    """
+    The frontend has already uploaded the file directly to Supabase Storage (hookify-sources).
+    Here we download from storage, transcribe with Whisper, ask Claude for clip ideas, persist project.
+    """
     if not EMERGENT_KEY:
         raise HTTPException(status_code=503, detail="AI not configured. EMERGENT_LLM_KEY missing on server.")
 
-    # ---- 1. Validate ----
-    filename = file.filename or "upload"
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if ext not in ALLOWED_ANALYZE_EXTS:
-        raise HTTPException(status_code=400, detail=f"Unsupported format '.{ext}'. Use mp4, mov, mp3, wav, or m4a.")
+    # Authorization: the source_key MUST start with the user's id (matches our storage RLS).
+    if not payload.source_key.startswith(f"{user['id']}/"):
+        raise HTTPException(status_code=403, detail="source_key does not belong to current user.")
 
-    data = await file.read()
+    ext = payload.source_key.rsplit(".", 1)[-1].lower() if "." in payload.source_key else "mp4"
+    if ext not in ALLOWED_ANALYZE_EXTS:
+        raise HTTPException(status_code=400, detail=f"Unsupported format '.{ext}'.")
+
+    try:
+        data = storage_download(SOURCES_BUCKET, payload.source_key)
+    except Exception as e:
+        logger.error(f"Storage fetch failed: {e}")
+        raise HTTPException(status_code=502, detail="Could not fetch uploaded file from storage.")
+
     if not data:
         raise HTTPException(status_code=400, detail="Empty file.")
     if len(data) > MAX_ANALYZE_BYTES:
-        raise HTTPException(status_code=413, detail="File too large. The MVP limit is 25 MB. Trim or compress your file and try again.")
+        raise HTTPException(status_code=413, detail="File too large for analysis (100 MB max).")
 
-    # ---- 2. Whisper transcription ----
-    # Whisper supports mp3/mp4/mpeg/mpga/m4a/wav/webm. .mov containers usually work
-    # when passed with an .mp4 extension hint to the API.
+    # Whisper
     send_ext = "mp4" if ext == "mov" else ext
     buf = BytesIO(data)
     buf.name = f"upload.{send_ext}"
-
     try:
         stt = OpenAISpeechToText(api_key=EMERGENT_KEY)
         transcript = await stt.transcribe(
@@ -441,53 +238,41 @@ async def ai_analyze(file: UploadFile = File(...), user: dict = Depends(get_curr
             timestamp_granularities=["segment"],
         )
     except Exception as e:
-        logger.error(f"Whisper transcription failed: {e}")
-        raise HTTPException(status_code=502, detail=f"Transcription failed. {str(e)[:200]}")
+        logger.error(f"Whisper failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Transcription failed: {str(e)[:200]}")
 
-    # Normalise transcript segments (Whisper SDK may return dicts OR objects).
     raw_segments = getattr(transcript, "segments", None) or []
     segments = []
     for seg in raw_segments:
         try:
-            if isinstance(seg, dict):
-                start = float(seg.get("start", 0))
-                end = float(seg.get("end", 0))
-                text = _safe_str(seg.get("text", ""))
-            else:
-                start = float(getattr(seg, "start", 0))
-                end = float(getattr(seg, "end", 0))
-                text = _safe_str(getattr(seg, "text", ""))
+            d = seg if isinstance(seg, dict) else seg.__dict__
+            text = _safe_str(d.get("text", ""))
             if text:
-                segments.append({"start": start, "end": end, "text": text})
+                segments.append({"start": float(d.get("start", 0)), "end": float(d.get("end", 0)), "text": text})
         except Exception:
             continue
 
     full_text = _safe_str(getattr(transcript, "text", "")) or " ".join(s["text"] for s in segments)
     duration = float(getattr(transcript, "duration", 0)) or (segments[-1]["end"] if segments else 0)
     language = _safe_str(getattr(transcript, "language", "en")) or "en"
-    logger.info(f"Whisper OK: {len(segments)} segments, {len(full_text)} chars, {duration:.1f}s")
 
     if not segments and not full_text:
         raise HTTPException(status_code=422, detail="Transcription returned no usable text. Try a longer or clearer recording.")
 
-    # ---- 3. Build LLM prompt ----
+    # Claude clip prompt
     if segments:
-        ts_lines = [f"[{s['start']:.1f}s-{s['end']:.1f}s] {s['text']}" for s in segments if s["text"]]
+        ts_lines = [f"[{s['start']:.1f}s-{s['end']:.1f}s] {s['text']}" for s in segments]
         transcript_for_llm = "\n".join(ts_lines)
     else:
         transcript_for_llm = f"[0.0s-{duration:.1f}s] {full_text}"
-
-    # Cap prompt size to avoid blowing context (Claude 4.5 has plenty, but be sensible).
     if len(transcript_for_llm) > 60000:
-        transcript_for_llm = transcript_for_llm[:60000] + "\n\n[…transcript truncated for analysis…]"
+        transcript_for_llm = transcript_for_llm[:60000] + "\n\n[…transcript truncated…]"
 
     user_prompt = (
         f"Source duration: {duration:.1f}s. Language: {language}.\n\n"
         f"TRANSCRIPT (with second-level timestamps):\n\n{transcript_for_llm}\n\n"
-        "Generate the JSON now. No commentary, no markdown — JSON only."
+        "Generate the JSON now."
     )
-
-    # ---- 4. Claude Sonnet 4.5 ----
     try:
         chat = LlmChat(
             api_key=EMERGENT_KEY,
@@ -496,68 +281,60 @@ async def ai_analyze(file: UploadFile = File(...), user: dict = Depends(get_curr
         ).with_model("anthropic", "claude-sonnet-4-5-20250929")
         response_text = await chat.send_message(UserMessage(text=user_prompt))
     except Exception as e:
-        logger.error(f"Claude analysis failed: {e}")
-        raise HTTPException(status_code=502, detail=f"AI analysis failed. {str(e)[:200]}")
+        logger.error(f"Claude failed: {e}")
+        raise HTTPException(status_code=502, detail=f"AI analysis failed: {str(e)[:200]}")
 
-    # ---- 5. Parse + coerce ----
     try:
         parsed = _extract_json(response_text)
     except Exception:
-        logger.error(f"AI returned non-JSON: {response_text[:400]}")
-        raise HTTPException(status_code=502, detail="AI returned an unreadable response. Please retry.")
+        raise HTTPException(status_code=502, detail="AI returned an unreadable response.")
 
-    raw_suggestions = parsed.get("suggestions") or []
     cleaned = []
-    for s in raw_suggestions[:5]:
+    for s in (parsed.get("suggestions") or [])[:5]:
         cs = _coerce_suggestion(s, duration)
         if cs:
             cleaned.append(cs)
     cleaned.sort(key=lambda x: x["confidence"], reverse=True)
-
     if len(cleaned) < 3:
-        raise HTTPException(status_code=502, detail="AI returned too few valid suggestions. Please retry.")
+        raise HTTPException(status_code=502, detail="AI returned too few valid suggestions.")
 
-    # ---- 6. Persist project + source video for later rendering ----
+    # Persist project to Supabase Postgres
     project_id = str(uuid.uuid4())
-    storage_path = None
-    storage_error = None
     try:
-        upload_path = f"{APP_NAME}/sources/{user['id']}/{project_id}.{ext}"
-        put_result = put_object(upload_path, data, file.content_type or "video/mp4")
-        storage_path = put_result.get("path", upload_path)
-    except Exception as e:
-        # Storage failure is NOT fatal — analysis still returns suggestions for instant feedback.
-        storage_error = str(e)[:200]
-        logger.error(f"Source persist failed: {e}")
-
-    try:
-        await db.ai_projects.insert_one({
+        sb_admin.table("ai_projects").insert({
             "id": project_id,
             "user_id": user["id"],
-            "filename": filename,
+            "filename": payload.filename or payload.source_key.split("/")[-1],
+            "source_bucket": SOURCES_BUCKET,
+            "source_key": payload.source_key,
+            "content_type": payload.content_type or "video/mp4",
             "size_bytes": len(data),
-            "content_type": file.content_type or "video/mp4",
-            "ext": ext,
-            "storage_path": storage_path,
             "language": language,
             "duration_seconds": duration,
-            "transcript_segments": segments[:200],   # cap to keep doc small
+            "transcript_segments": segments[:200],
             "transcript_text": full_text[:20000],
             "suggestions": cleaned,
-            "suggestion_count": len(cleaned),
-            "is_deleted": False,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
+            "status": "ready",
+        }).execute()
+
+        # Update usage minutes
+        try:
+            mins = max(1, int(round(duration / 60)))
+            sb_admin.rpc("noop", {}).execute() if False else None  # placeholder
+            # Read-then-write
+            prof = sb_admin.table("profiles").select("minutes_used_month").eq("id", user["id"]).single().execute()
+            cur = float((prof.data or {}).get("minutes_used_month") or 0)
+            sb_admin.table("profiles").update({"minutes_used_month": cur + mins, "updated_at": _now_iso()}).eq("id", user["id"]).execute()
+        except Exception as e:
+            logger.warning(f"Usage update skipped: {e}")
     except Exception as e:
-        logger.warning(f"Could not persist ai_project: {e}")
+        logger.error(f"Project persist failed: {e}")
 
     return {
         "project_id": project_id,
-        "filename": filename,
+        "filename": payload.filename or "",
         "mode": "real_ai",
-        "storage_path": storage_path,
-        "render_ready": bool(storage_path),
-        "storage_error": storage_error,
+        "render_ready": True,
         "transcript": {
             "language": language,
             "duration": duration,
@@ -568,94 +345,46 @@ async def ai_analyze(file: UploadFile = File(...), user: dict = Depends(get_curr
     }
 
 
-@api_router.post("/clips")
-async def create_clip(payload: ClipCreateIn, user: dict = Depends(get_current_user)):
-    clip_id = str(uuid.uuid4())
-    clip = {
-        "id": clip_id,
-        "user_id": user["id"],
-        "title": payload.title,
-        "source_video_id": payload.source_video_id,
-        "duration_seconds": payload.duration_seconds or 60,
-        "start_seconds": 0,
-        "end_seconds": payload.duration_seconds or 60,
-        "viral_score": 87,
-        "caption_style": "Bold-Yellow",
-        "is_exported": False,
-        "thumbnail_color": "#CCFF00",
-        "transcript_preview": MOCK_TRANSCRIPT_SEGMENTS[0]["text"],
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db.clips.insert_one(clip)
-    clip.pop("_id", None)
-    return clip
-
-
-@api_router.get("/clips")
-async def list_clips(user: dict = Depends(get_current_user)):
-    clips = await db.clips.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
-    return clips
-
-
-@api_router.get("/clips/{clip_id}")
-async def get_clip(clip_id: str, user: dict = Depends(get_current_user)):
-    clip = await db.clips.find_one({"id": clip_id, "user_id": user["id"]}, {"_id": 0})
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    return clip
-
-
-@api_router.patch("/clips/{clip_id}")
-async def update_clip(clip_id: str, payload: ClipUpdateIn, user: dict = Depends(get_current_user)):
-    updates = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
-    if not updates:
-        raise HTTPException(status_code=400, detail="No fields to update")
-    res = await db.clips.update_one({"id": clip_id, "user_id": user["id"]}, {"$set": updates})
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    clip = await db.clips.find_one({"id": clip_id, "user_id": user["id"]}, {"_id": 0})
-    return clip
-
-
-@api_router.delete("/clips/{clip_id}")
-async def delete_clip(clip_id: str, user: dict = Depends(get_current_user)):
-    res = await db.clips.delete_one({"id": clip_id, "user_id": user["id"]})
-    if res.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    return {"ok": True}
-
-
-@api_router.post("/clips/{clip_id}/export")
-async def export_clip(clip_id: str, user: dict = Depends(get_current_user)):
-    res = await db.clips.update_one({"id": clip_id, "user_id": user["id"]}, {"$set": {"is_exported": True}})
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    return {"ok": True, "download_url": f"/api/clips/{clip_id}/download"}
-
-
-# ============================================================
-# PROJECTS (uploaded source videos + their AI suggestions)
-# ============================================================
+# ---------- ROUTES: PROJECTS ----------
 @api_router.get("/projects")
 async def list_projects(user: dict = Depends(get_current_user)):
-    docs = await db.ai_projects.find(
-        {"user_id": user["id"], "is_deleted": {"$ne": True}},
-        {"_id": 0, "transcript_text": 0}
-    ).sort("created_at", -1).to_list(100)
-    return docs
+    res = sb_admin.table("ai_projects").select("*").eq("user_id", user["id"]).order("created_at", desc=True).limit(100).execute()
+    return res.data or []
 
 
 @api_router.get("/projects/{project_id}")
 async def get_project(project_id: str, user: dict = Depends(get_current_user)):
-    doc = await db.ai_projects.find_one({"id": project_id, "user_id": user["id"], "is_deleted": {"$ne": True}}, {"_id": 0})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return doc
+    res = sb_admin.table("ai_projects").select("*").eq("id", project_id).eq("user_id", user["id"]).single().execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Not found")
+    return res.data
 
 
-# ============================================================
-# RENDER PIPELINE (FFmpeg 9:16 + burnt captions, persistent storage)
-# ============================================================
+# ---------- ROUTES: RENDER ----------
+class RenderStartIn(BaseModel):
+    project_id: str
+    start_seconds: float
+    end_seconds: float
+    title: str = ""
+    caption_text: str = ""
+    platform: str = "TikTok"
+
+
+def _write_srt(text: str, duration: float, path: Path):
+    def to_ts(s: float) -> str:
+        h = int(s // 3600)
+        m = int((s % 3600) // 60)
+        sec = s - h * 3600 - m * 60
+        return f"{h:02d}:{m:02d}:{sec:06.3f}".replace(".", ",")
+    safe = (text or "").replace("\r", "").strip() or " "
+    safe = safe.replace("\\", " ").replace("{", "(").replace("}", ")")
+    end = max(1.0, float(duration))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("1\n")
+        f.write(f"{to_ts(0)} --> {to_ts(end)}\n")
+        f.write(safe + "\n\n")
+
+
 RENDER_STAGES = [
     ("preparing", 5,    "Preparing clip"),
     ("downloading", 15, "Downloading source"),
@@ -668,80 +397,53 @@ RENDER_STAGES = [
 ]
 
 
-class RenderStartIn(BaseModel):
-    project_id: str
-    start_seconds: float
-    end_seconds: float
-    title: str = ""
-    caption_text: str = ""
-    platform: str = "TikTok"
-
-
-def _ass_escape(t: str) -> str:
-    return (t or "").replace("\\", " ").replace("{", "(").replace("}", ")")
-
-
-def _write_srt(text: str, duration: float, path: Path):
-    def to_ts(s: float) -> str:
-        h = int(s // 3600)
-        m = int((s % 3600) // 60)
-        sec = s - h * 3600 - m * 60
-        return f"{h:02d}:{m:02d}:{sec:06.3f}".replace(".", ",")
-    safe = (text or "").replace("\r", "").strip() or " "
-    # SRT supports inline line breaks via real newlines; FFmpeg's libass handles them.
-    safe = _ass_escape(safe)
-    end = max(1.0, float(duration))
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("1\n")
-        f.write(f"{to_ts(0)} --> {to_ts(end)}\n")
-        f.write(safe + "\n\n")
-
-
-async def _set_render_stage(job_id: str, stage_key: str):
+def _set_stage(job_id: str, stage_key: str):
     stage = next((s for s in RENDER_STAGES if s[0] == stage_key), None)
     if not stage:
         return
-    await db.render_jobs.update_one(
-        {"id": job_id},
-        {"$set": {"status": stage[0], "progress": stage[1], "stage_label": stage[2]}}
-    )
+    try:
+        sb_admin.table("render_jobs").update({
+            "status": stage[0], "progress": stage[1], "stage_label": stage[2],
+            "updated_at": _now_iso(),
+        }).eq("id", job_id).execute()
+    except Exception as e:
+        logger.warning(f"Stage update failed: {e}")
 
 
 async def _run_render_job(job_id: str):
-    """Background pipeline: storage -> tmp -> ffmpeg -> storage."""
     tmp_dir = Path(tempfile.mkdtemp(prefix=f"hookify-{job_id}-"))
     try:
-        job = await db.render_jobs.find_one({"id": job_id}, {"_id": 0})
+        job_res = sb_admin.table("render_jobs").select("*").eq("id", job_id).single().execute()
+        job = job_res.data
         if not job:
             return
-        project = await db.ai_projects.find_one({"id": job["project_id"], "user_id": job["user_id"]}, {"_id": 0})
-        if not project or not project.get("storage_path"):
-            await db.render_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error": "Source video missing in storage."}})
+        proj_res = sb_admin.table("ai_projects").select("source_bucket, source_key").eq("id", job["project_id"]).single().execute()
+        project = proj_res.data
+        if not project:
+            sb_admin.table("render_jobs").update({"status": "failed", "error": "Source project missing.", "updated_at": _now_iso()}).eq("id", job_id).execute()
             return
 
-        await _set_render_stage(job_id, "downloading")
-        src_ext = project.get("ext", "mp4")
+        _set_stage(job_id, "downloading")
+        src_ext = (project["source_key"].rsplit(".", 1)[-1] or "mp4").lower()
         src_path = tmp_dir / f"src.{src_ext}"
         try:
-            data, _ct = get_object(project["storage_path"])
+            data = storage_download(project["source_bucket"], project["source_key"])
         except Exception as e:
-            await db.render_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error": f"Storage fetch failed: {str(e)[:160]}"}})
+            sb_admin.table("render_jobs").update({"status": "failed", "error": f"Storage fetch failed: {str(e)[:160]}", "updated_at": _now_iso()}).eq("id", job_id).execute()
             return
         src_path.write_bytes(data)
 
-        # FFmpeg invocation
         start = max(0.0, float(job["start_seconds"]))
         end = max(start + 1.0, float(job["end_seconds"]))
         duration = end - start
         caption_text = job.get("caption_text") or job.get("title") or ""
 
-        await _set_render_stage(job_id, "cutting")
+        _set_stage(job_id, "cutting")
         srt_path = tmp_dir / "cap.srt"
         _write_srt(caption_text, duration, srt_path)
         out_path = tmp_dir / "out.mp4"
 
-        # Centered 9:16 crop -> 1080x1920, burnt SRT captions volt-yellow.
-        # PrimaryColour ASS = &HAABBGGRR. #CCFF00 -> BGR 00FFCC.
+        # Purple-cyan caption style: PrimaryColour=&HAABBGGRR. Use teal/cyan (#22D3EE -> BGR EED322).
         vf = (
             "crop='min(iw,ih*9/16)':'min(ih,iw*16/9)':"
             "'(iw-min(iw,ih*9/16))/2':'(ih-min(ih,iw*16/9))/2',"
@@ -749,87 +451,68 @@ async def _run_render_job(job_id: str):
             "crop=1080:1920,"
             f"subtitles='{srt_path.as_posix()}':force_style='"
             "Fontname=DejaVu Sans,Fontsize=20,Bold=1,"
-            "PrimaryColour=&H0000FFCC,OutlineColour=&H80000000,"
+            "PrimaryColour=&H00EED322,OutlineColour=&H80000000,"
             "BorderStyle=1,Outline=3,Shadow=0,Alignment=2,MarginV=160'"
         )
         cmd = [
             "ffmpeg", "-y", "-ss", f"{start:.3f}", "-to", f"{end:.3f}",
-            "-i", str(src_path),
-            "-vf", vf,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-            "-pix_fmt", "yuv420p",
+            "-i", str(src_path), "-vf", vf,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "128k", "-ac", "2",
             "-movflags", "+faststart",
             str(out_path),
         ]
-        await _set_render_stage(job_id, "formatting")
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await _set_render_stage(job_id, "captions")
+        _set_stage(job_id, "formatting")
+        proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        _set_stage(job_id, "captions")
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
+            _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
         except asyncio.TimeoutError:
             try:
                 proc.kill()
             except Exception:
                 pass
-            await db.render_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error": "FFmpeg render timed out after 10 min."}})
+            sb_admin.table("render_jobs").update({"status": "failed", "error": "FFmpeg timed out.", "updated_at": _now_iso()}).eq("id", job_id).execute()
             return
 
         if proc.returncode != 0 or not out_path.exists():
-            err = (stderr or b"").decode(errors="ignore")[-500:]
-            logger.error(f"FFmpeg failed for {job_id}: {err}")
-            await db.render_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error": "FFmpeg failed. " + err[-200:]}})
+            err = (stderr or b"").decode(errors="ignore")[-300:]
+            sb_admin.table("render_jobs").update({"status": "failed", "error": "FFmpeg failed: " + err[-150:], "updated_at": _now_iso()}).eq("id", job_id).execute()
             return
 
-        await _set_render_stage(job_id, "rendering")
-
-        # Upload rendered MP4 to object storage (persistent).
-        await _set_render_stage(job_id, "uploading")
-        render_storage_path = f"{APP_NAME}/renders/{job['user_id']}/{job_id}.mp4"
+        _set_stage(job_id, "rendering")
+        _set_stage(job_id, "uploading")
+        out_key = f"{job['user_id']}/{job_id}.mp4"
         out_bytes = out_path.read_bytes()
         try:
-            put_result = put_object(render_storage_path, out_bytes, "video/mp4")
-            stored_path = put_result.get("path", render_storage_path)
+            storage_upload(RENDERS_BUCKET, out_key, out_bytes, "video/mp4")
         except Exception as e:
-            logger.error(f"Render upload failed: {e}")
-            await db.render_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error": f"Render upload failed: {str(e)[:160]}"}})
+            sb_admin.table("render_jobs").update({"status": "failed", "error": f"Render upload failed: {str(e)[:160]}", "updated_at": _now_iso()}).eq("id", job_id).execute()
             return
 
-        await db.render_jobs.update_one(
-            {"id": job_id},
-            {"$set": {
-                "status": "ready", "progress": 100, "stage_label": "Ready to download",
-                "output_storage_path": stored_path,
-                "size_bytes": len(out_bytes),
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-            }},
-        )
-        logger.info(f"Render {job_id} complete: {len(out_bytes)} bytes -> {stored_path}")
+        sb_admin.table("render_jobs").update({
+            "status": "ready", "progress": 100, "stage_label": "Ready to download",
+            "output_key": out_key, "size_bytes": len(out_bytes), "updated_at": _now_iso(),
+        }).eq("id", job_id).execute()
+        logger.info(f"Render {job_id} done: {len(out_bytes)} bytes -> {out_key}")
     except Exception as e:
         logger.exception(f"Render job {job_id} crashed")
-        await db.render_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "error": str(e)[:200]}})
-    finally:
         try:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            sb_admin.table("render_jobs").update({"status": "failed", "error": str(e)[:200], "updated_at": _now_iso()}).eq("id", job_id).execute()
         except Exception:
             pass
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 @api_router.post("/render/start")
 async def render_start(payload: RenderStartIn, user: dict = Depends(get_current_user)):
-    project = await db.ai_projects.find_one({"id": payload.project_id, "user_id": user["id"], "is_deleted": {"$ne": True}}, {"_id": 0})
-    if not project:
+    proj_res = sb_admin.table("ai_projects").select("*").eq("id", payload.project_id).eq("user_id", user["id"]).single().execute()
+    if not proj_res.data:
         raise HTTPException(status_code=404, detail="Project not found")
-    if not project.get("storage_path"):
-        raise HTTPException(status_code=400, detail="Source video not stored — re-upload to enable rendering.")
-
     duration = max(1.0, float(payload.end_seconds) - float(payload.start_seconds))
     if duration > 180:
-        raise HTTPException(status_code=400, detail="Clip too long. Max 3 minutes for v1.")
+        raise HTTPException(status_code=400, detail="Clip too long. Max 3 minutes.")
 
     job_id = str(uuid.uuid4())
     job = {
@@ -845,61 +528,34 @@ async def render_start(payload: RenderStartIn, user: dict = Depends(get_current_
         "status": "preparing",
         "stage_label": "Preparing clip",
         "progress": 5,
-        "output_storage_path": None,
-        "size_bytes": None,
-        "error": None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "output_bucket": RENDERS_BUCKET,
     }
-    await db.render_jobs.insert_one(job)
-    # Fire-and-forget: render runs concurrently while we return immediately.
+    sb_admin.table("render_jobs").insert(job).execute()
     asyncio.create_task(_run_render_job(job_id))
-    job.pop("_id", None)
     return job
 
 
 @api_router.get("/render/{job_id}")
 async def render_status(job_id: str, user: dict = Depends(get_current_user)):
-    job = await db.render_jobs.find_one({"id": job_id, "user_id": user["id"]}, {"_id": 0})
-    if not job:
-        raise HTTPException(status_code=404, detail="Render job not found")
-    return job
+    res = sb_admin.table("render_jobs").select("*").eq("id", job_id).eq("user_id", user["id"]).single().execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Not found")
+    return res.data
 
 
-@api_router.get("/render/{job_id}/download")
-async def render_download(job_id: str, request: Request, auth: Optional[str] = Query(None), authorization: Optional[str] = Header(None)):
-    # Support cookie (default browser auth), Authorization header, or ?auth=token query.
-    token = None
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization[7:]
-    elif auth:
-        token = auth
-    else:
-        token = request.cookies.get("access_token")
-
-    if not token:
-        raise HTTPException(status_code=401, detail="Auth required")
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        user_id = payload["sub"]
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    job = await db.render_jobs.find_one({"id": job_id, "user_id": user_id}, {"_id": 0})
+@api_router.get("/render/{job_id}/download-url")
+async def render_download_url(job_id: str, user: dict = Depends(get_current_user)):
+    res = sb_admin.table("render_jobs").select("status, output_key, output_bucket").eq("id", job_id).eq("user_id", user["id"]).single().execute()
+    job = res.data
     if not job:
         raise HTTPException(status_code=404, detail="Not found")
-    if job.get("status") != "ready" or not job.get("output_storage_path"):
+    if job.get("status") != "ready" or not job.get("output_key"):
         raise HTTPException(status_code=409, detail="Render not ready")
-    data, _ct = get_object(job["output_storage_path"])
-    fname = re.sub(r"[^A-Za-z0-9._-]+", "-", job.get("title") or "hookify-clip")[:60] or "hookify-clip"
-    return Response(
-        content=data,
-        media_type="video/mp4",
-        headers={"Content-Disposition": f'attachment; filename="{fname}.mp4"'},
-    )
+    url = storage_signed_url(job.get("output_bucket") or RENDERS_BUCKET, job["output_key"], expires_in=3600)
+    return {"url": url}
 
 
-# ============================================================
-# SAVED CLIPS (server-backed workspace)
-# ============================================================
+# ---------- ROUTES: SAVED CLIPS ----------
 class SavedClipIn(BaseModel):
     project_id: Optional[str] = None
     title: str = ""
@@ -917,52 +573,35 @@ class SavedClipIn(BaseModel):
 
 
 @api_router.get("/saved-clips")
-async def list_saved_clips(user: dict = Depends(get_current_user)):
-    docs = await db.saved_clips.find(
-        {"user_id": user["id"], "is_deleted": {"$ne": True}},
-        {"_id": 0}
-    ).sort("updated_at", -1).to_list(500)
-    return docs
+async def list_saved(user: dict = Depends(get_current_user)):
+    res = sb_admin.table("saved_clips").select("*").eq("user_id", user["id"]).eq("is_deleted", False).order("updated_at", desc=True).limit(500).execute()
+    return res.data or []
 
 
 @api_router.post("/saved-clips")
-async def create_saved_clip(payload: SavedClipIn, user: dict = Depends(get_current_user)):
-    clip_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
-    doc = {**payload.model_dump(), "id": clip_id, "user_id": user["id"], "is_deleted": False, "created_at": now, "updated_at": now}
-    await db.saved_clips.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
+async def create_saved(payload: SavedClipIn, user: dict = Depends(get_current_user)):
+    doc = {**payload.model_dump(), "user_id": user["id"], "is_deleted": False}
+    res = sb_admin.table("saved_clips").insert(doc).execute()
+    return (res.data or [doc])[0]
 
 
 @api_router.patch("/saved-clips/{clip_id}")
-async def update_saved_clip(clip_id: str, payload: SavedClipIn, user: dict = Depends(get_current_user)):
+async def update_saved(clip_id: str, payload: SavedClipIn, user: dict = Depends(get_current_user)):
     patch = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
-    patch["updated_at"] = datetime.now(timezone.utc).isoformat()
-    res = await db.saved_clips.update_one(
-        {"id": clip_id, "user_id": user["id"], "is_deleted": {"$ne": True}},
-        {"$set": patch},
-    )
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Saved clip not found")
-    doc = await db.saved_clips.find_one({"id": clip_id, "user_id": user["id"]}, {"_id": 0})
-    return doc
+    patch["updated_at"] = _now_iso()
+    res = sb_admin.table("saved_clips").update(patch).eq("id", clip_id).eq("user_id", user["id"]).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Not found")
+    return res.data[0]
 
 
 @api_router.delete("/saved-clips/{clip_id}")
-async def delete_saved_clip(clip_id: str, user: dict = Depends(get_current_user)):
-    res = await db.saved_clips.update_one(
-        {"id": clip_id, "user_id": user["id"]},
-        {"$set": {"is_deleted": True, "updated_at": datetime.now(timezone.utc).isoformat()}},
-    )
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Saved clip not found")
+async def delete_saved(clip_id: str, user: dict = Depends(get_current_user)):
+    sb_admin.table("saved_clips").update({"is_deleted": True, "updated_at": _now_iso()}).eq("id", clip_id).eq("user_id", user["id"]).execute()
     return {"ok": True}
 
 
-# ============================================================
-# USER SETTINGS (server-side, per user)
-# ============================================================
+# ---------- ROUTES: SETTINGS ----------
 class SettingsIn(BaseModel):
     creator_name: Optional[str] = None
     preferred_platform: Optional[str] = None
@@ -972,7 +611,7 @@ class SettingsIn(BaseModel):
     active_template_id: Optional[str] = None
 
 
-DEFAULT_USER_SETTINGS = {
+DEFAULT_SETTINGS = {
     "creator_name": "",
     "preferred_platform": "TikTok",
     "caption_style": "Bold",
@@ -984,120 +623,62 @@ DEFAULT_USER_SETTINGS = {
 
 @api_router.get("/settings")
 async def get_settings(user: dict = Depends(get_current_user)):
-    doc = await db.user_settings.find_one({"user_id": user["id"]}, {"_id": 0, "user_id": 0})
-    return doc or {**DEFAULT_USER_SETTINGS, "creator_name": user.get("name", "")}
+    res = sb_admin.table("user_settings").select("*").eq("user_id", user["id"]).limit(1).execute()
+    if res.data:
+        row = dict(res.data[0])
+        row.pop("user_id", None)
+        return row
+    return {**DEFAULT_SETTINGS, "creator_name": user.get("name", "")}
 
 
 @api_router.put("/settings")
 async def put_settings(payload: SettingsIn, user: dict = Depends(get_current_user)):
-    update = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
-    update["updated_at"] = datetime.now(timezone.utc).isoformat()
-    await db.user_settings.update_one(
-        {"user_id": user["id"]},
-        {"$set": {**update, "user_id": user["id"]}},
-        upsert=True,
-    )
-    doc = await db.user_settings.find_one({"user_id": user["id"]}, {"_id": 0, "user_id": 0})
-    return doc
+    patch = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
+    patch["user_id"] = user["id"]
+    patch["updated_at"] = _now_iso()
+    sb_admin.table("user_settings").upsert(patch, on_conflict="user_id").execute()
+    res = sb_admin.table("user_settings").select("*").eq("user_id", user["id"]).single().execute()
+    row = dict(res.data or {})
+    row.pop("user_id", None)
+    return row
 
 
+# ---------- ROUTES: PROFILE / USAGE ----------
+@api_router.get("/profile")
+async def get_profile(user: dict = Depends(get_current_user)):
+    # Ensure a profile exists (trigger normally handles this; this is a safety net).
+    res = sb_admin.table("profiles").select("*").eq("id", user["id"]).limit(1).execute()
+    if not res.data:
+        sb_admin.table("profiles").upsert({"id": user["id"], "display_name": user.get("name", "")}, on_conflict="id").execute()
+        res = sb_admin.table("profiles").select("*").eq("id", user["id"]).single().execute()
+    p = dict(res.data[0] if isinstance(res.data, list) else res.data)
+    # Recent clips for dashboard
+    recent = sb_admin.table("ai_projects").select("id, filename, duration_seconds, created_at, suggestions").eq("user_id", user["id"]).order("created_at", desc=True).limit(5).execute()
+    return {"profile": p, "user": user, "recent_projects": recent.data or []}
+
+
+# ---------- ROOT ----------
 @api_router.get("/")
 async def root():
-    return {"service": "ClipForge AI API", "ok": True}
+    return {"service": "Hookify AI API", "ok": True}
 
 
 # ---------- STARTUP ----------
-async def seed_users():
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@clipforge.ai")
-    admin_password = os.environ.get("ADMIN_PASSWORD", "ClipForge2026!")
-    if not await db.users.find_one({"email": admin_email}):
-        await db.users.insert_one({
-            "id": str(uuid.uuid4()),
-            "email": admin_email,
-            "name": "ClipForge Admin",
-            "password_hash": hash_password(admin_password),
-            "role": "admin",
-            "plan": "pro",
-            "avatar": None,
-            "provider": "email",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-
-    test_email = os.environ.get("TEST_USER_EMAIL", "creator@clipforge.ai")
-    test_password = os.environ.get("TEST_USER_PASSWORD", "Creator2026!")
-    if not await db.users.find_one({"email": test_email}):
-        test_user_id = str(uuid.uuid4())
-        await db.users.insert_one({
-            "id": test_user_id,
-            "email": test_email,
-            "name": "Maya Reyes",
-            "password_hash": hash_password(test_password),
-            "role": "user",
-            "plan": "free",
-            "avatar": None,
-            "provider": "email",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-        # Seed sample clips for the demo user
-        demo_clips = [
-            {"title": "The 3 hooks that broke a million views", "viral_score": 96, "duration_seconds": 38, "transcript_preview": "What if I told you that the single biggest mistake creators make..."},
-            {"title": "Three viral patterns creators sleep on", "viral_score": 89, "duration_seconds": 42, "transcript_preview": "If your hook doesn't slap, your video is dead on arrival."},
-            {"title": "Never start your Reel with a static shot", "viral_score": 84, "duration_seconds": 34, "transcript_preview": "Pattern two: use motion in the first frame, never a static shot."},
-        ]
-        for i, c in enumerate(demo_clips):
-            await db.clips.insert_one({
-                "id": str(uuid.uuid4()),
-                "user_id": test_user_id,
-                "title": c["title"],
-                "source_video_id": None,
-                "duration_seconds": c["duration_seconds"],
-                "start_seconds": 0,
-                "end_seconds": c["duration_seconds"],
-                "viral_score": c["viral_score"],
-                "caption_style": "Bold-Yellow",
-                "is_exported": False,
-                "thumbnail_color": "#CCFF00",
-                "transcript_preview": c["transcript_preview"],
-                "created_at": (datetime.now(timezone.utc) - timedelta(days=i)).isoformat(),
-            })
-
-
 @app.on_event("startup")
 async def startup():
-    await db.users.create_index("email", unique=True)
-    await db.clips.create_index("user_id")
-    await db.videos.create_index("user_id")
-    await db.ai_projects.create_index("user_id")
-    await db.render_jobs.create_index("user_id")
-    await db.saved_clips.create_index("user_id")
-    await db.user_settings.create_index("user_id", unique=True)
-    await seed_users()
-    try:
-        init_storage()
-        logger.info("Object storage initialized")
-    except Exception as e:
-        logger.warning(f"Storage init deferred: {e}")
-    # Confirm ffmpeg is on PATH for the render pipeline.
     try:
         ver = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=5)
-        logger.info(f"FFmpeg ready: {ver.stdout.splitlines()[0] if ver.stdout else 'unknown'}")
+        logger.info(f"FFmpeg ready: {ver.stdout.splitlines()[0] if ver.stdout else '?'}")
     except Exception as e:
-        logger.error(f"FFmpeg unavailable — render pipeline will fail. {e}")
-    logger.info("Hookify AI API ready")
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    client.close()
+        logger.error(f"FFmpeg unavailable: {e}")
+    logger.info(f"Hookify API ready. Sources={SOURCES_BUCKET} Renders={RENDERS_BUCKET}")
 
 
 # ---------- WIRING ----------
 app.include_router(api_router)
-
-frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[frontend_url, "http://localhost:3000"],
+    allow_origins=[FRONTEND_URL, "http://localhost:3000", "https://clipping-app-five.vercel.app", "https://clipforge-ai-33.preview.emergentagent.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -51,7 +51,7 @@ export default function Navbar({ variant = "marketing" }) {
           ) : (
             <>
               <Link to="/login" className="text-sm text-zinc-300 hover:text-white" data-testid="nav-login">Log in</Link>
-              <Link to="/signup" className="bg-volt text-black text-sm font-medium px-4 py-2 rounded-md hover:bg-volt-300 transition-colors" data-testid="nav-signup">Start free</Link>
+              <Link to="/signup" className="btn-brand text-sm font-medium px-4 py-2 rounded-md" data-testid="nav-signup">Start free</Link>
             </>
           )}
         </div>
@@ -74,7 +74,7 @@ export default function Navbar({ variant = "marketing" }) {
           ) : (
             <>
               <Link to="/login" onClick={() => setOpen(false)} className="block text-sm" data-testid="mnav-login">Log in</Link>
-              <Link to="/signup" onClick={() => setOpen(false)} className="block bg-volt text-black text-sm font-medium px-4 py-2 rounded-md w-fit" data-testid="mnav-signup">Start free</Link>
+              <Link to="/signup" onClick={() => setOpen(false)} className="block btn-brand text-sm font-medium px-4 py-2 rounded-md w-fit" data-testid="mnav-signup">Start free</Link>
             </>
           )}
         </div>

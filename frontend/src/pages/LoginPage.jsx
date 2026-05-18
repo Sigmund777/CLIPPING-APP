@@ -1,14 +1,14 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useAuth, formatApiErrorDetail } from "../lib/auth";
+import { useAuth } from "../lib/auth";
 import { toast } from "sonner";
 import { Sparkles, Eye, EyeOff } from "lucide-react";
 
 export default function LoginPage() {
   const { login, googleAuth } = useAuth();
   const nav = useNavigate();
-  const [email, setEmail] = useState("creator@clipforge.ai");
-  const [password, setPassword] = useState("Creator2026!");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -22,7 +22,7 @@ export default function LoginPage() {
       toast.success("Welcome back");
       nav("/dashboard");
     } catch (err) {
-      setError(formatApiErrorDetail(err.response?.data?.detail) || err.message);
+      setError(err?.message || "Could not log in.");
     } finally {
       setLoading(false);
     }
@@ -32,10 +32,9 @@ export default function LoginPage() {
     setError("");
     try {
       await googleAuth();
-      toast.success("Signed in with Google");
-      nav("/dashboard");
+      // Supabase redirects, no nav needed here.
     } catch (err) {
-      setError(formatApiErrorDetail(err.response?.data?.detail) || err.message);
+      setError(err?.message || "Google sign-in unavailable.");
     }
   };
 
@@ -43,15 +42,17 @@ export default function LoginPage() {
     <div className="min-h-screen flex bg-ink-950 text-white" data-testid="login-page">
       <div className="hidden lg:flex flex-1 flex-col justify-between p-12 border-r border-white/5 relative overflow-hidden">
         <div className="absolute inset-0 dot-grid opacity-30" />
+        <div className="absolute -top-32 -left-32 w-[480px] h-[480px] bg-purple/20 rounded-full blur-3xl" />
+        <div className="absolute -bottom-32 -right-32 w-[480px] h-[480px] bg-volt/10 rounded-full blur-3xl" />
         <Link to="/" className="relative flex items-center gap-2 w-fit">
-          <div className="w-8 h-8 rounded-md bg-volt flex items-center justify-center"><Sparkles className="w-4 h-4 text-black" strokeWidth={2.5} /></div>
+          <div className="w-8 h-8 rounded-md btn-brand flex items-center justify-center"><Sparkles className="w-4 h-4 text-white" strokeWidth={2.5} /></div>
           <span className="font-heading font-semibold text-lg">Hookify<span className="text-volt">.</span></span>
         </Link>
         <div className="relative max-w-md">
           <blockquote className="font-heading text-2xl font-medium leading-snug">"My team posts 4× more clips and saves 22 hours a week. Hookify basically replaced our junior editor — politely."</blockquote>
           <div className="mt-6 text-sm text-zinc-400">Marcus Halloway · The Founders Lab Podcast</div>
         </div>
-        <div className="relative text-xs text-zinc-600 font-mono">v2.4 · {new Date().getFullYear()}</div>
+        <div className="relative text-xs text-zinc-600 font-mono">v3 · {new Date().getFullYear()}</div>
       </div>
 
       <div className="flex-1 flex items-center justify-center p-6">
@@ -73,7 +74,7 @@ export default function LoginPage() {
           <div className="space-y-3">
             <div>
               <label className="text-xs font-medium text-zinc-400 mb-1.5 block">Email</label>
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="w-full bg-ink-900 border border-white/10 rounded-md px-3 py-2.5 text-sm focus:border-volt focus:outline-none transition-colors" data-testid="login-email" />
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="you@studio.com" className="w-full bg-ink-900 border border-white/10 rounded-md px-3 py-2.5 text-sm focus:border-volt focus:outline-none transition-colors" data-testid="login-email" />
             </div>
             <div>
               <label className="text-xs font-medium text-zinc-400 mb-1.5 block">Password</label>
@@ -88,7 +89,7 @@ export default function LoginPage() {
 
           {error && <div className="text-xs text-red-400 bg-red-500/5 border border-red-500/20 rounded-md px-3 py-2" data-testid="login-error">{error}</div>}
 
-          <button type="submit" disabled={loading} className="w-full bg-volt text-black font-medium py-3 rounded-md hover:bg-volt-300 transition-colors disabled:opacity-50" data-testid="login-submit">
+          <button type="submit" disabled={loading} className="w-full btn-brand font-medium py-3 rounded-md disabled:opacity-50" data-testid="login-submit">
             {loading ? "Logging in…" : "Log in"}
           </button>
 
