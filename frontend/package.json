@@ -72,9 +72,8 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
-  "resolutions": {
+  "overides": {
     "ajv": "^8.17.1"
-  },
   },
 "devDependencies": {
   "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
