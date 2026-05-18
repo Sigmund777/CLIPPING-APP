@@ -8,15 +8,17 @@ export default function AuthCallbackPage() {
 
   useEffect(() => {
     if (!loading && user) {
+      // Successfully signed in with Google → go to dashboard
       navigate("/dashboard", { replace: true });
     } else if (!loading && !user) {
       navigate("/login", { replace: true });
     }
   }, [user, loading, navigate]);
 
+  // Loading screen while redirecting
   return (
     <div className="min-h-screen flex items-center justify-center bg-ink-950">
-      <div className="text-zinc-400">Completing sign in...</div>
+      <div className="text-zinc-400 text-lg">Completing sign in...</div>
     </div>
   );
 }
