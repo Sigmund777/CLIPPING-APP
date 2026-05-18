@@ -108,9 +108,12 @@ export default function DashboardPage() {
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+    useEffect(() => {
     let cancel = false;
+
     const load = async () => {
+      if (!user) return;   // ← Add this
+
       try {
         const [{ data: prof }, { data: projs }] = await Promise.all([
           api.get("/profile"),
@@ -121,14 +124,20 @@ export default function DashboardPage() {
         setProjects(projs || []);
         setSelected((projs || [])[0] || null);
       } catch (err) {
-        if (!cancel) toast.error("Could not load dashboard", { description: err?.response?.data?.detail || err?.message });
+        console.error("Dashboard load error:", err);
+        if (!cancel) {
+          toast.error("Could not load dashboard", { 
+            description: err?.response?.data?.detail || err?.message 
+          });
+        }
       } finally {
         if (!cancel) setLoading(false);
       }
     };
+
     load();
     return () => { cancel = true; };
-  }, []);
+  }, [user]);   // ← Important: added user dependency
 
   const plan = profile?.profile?.plan || "free";
   const used = Number(profile?.profile?.minutes_used_month || 0);
