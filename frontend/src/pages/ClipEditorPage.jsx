@@ -185,18 +185,23 @@ export default function ClipEditorPage() {
     setTimeout(tick, 1500);
   };
 
-  const downloadRender = () => {
+  const downloadRender = async () => {
     if (!renderJob?.id || renderJob.status !== "ready") return;
-    // Cookie-based auth carries the JWT — direct anchor download works.
-    const base = (process.env.REACT_APP_BACKEND_URL || "").replace(/\/$/, "");
-    const url = `${base}/api/render/${renderJob.id}/download`;
-    const link = document.createElement("a");
-    link.href = url;
-    link.target = "_blank";
-    link.rel = "noopener";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    try {
+      const { data } = await api.get(`/render/${renderJob.id}/download-url`, { timeout: 8000 });
+      if (!data?.url) throw new Error("No URL returned");
+      const link = document.createElement("a");
+      link.href = data.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      // Download attribute hints the browser to save instead of navigate.
+      link.download = (editTitle || "hookify-clip").replace(/[^A-Za-z0-9._-]+/g, "-") + ".mp4";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      toast.error("Could not start download", { description: err?.response?.data?.detail || err?.message });
+    }
   };
 
   const handleSaveClip = () => {

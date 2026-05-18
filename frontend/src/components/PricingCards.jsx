@@ -1,56 +1,74 @@
 import React from "react";
 import { Link } from "react-router-dom";
-import { Check } from "lucide-react";
+import { Check, Crown, Zap, Sparkles, Building2 } from "lucide-react";
 
 export const PLANS = [
   {
-    id: "starter",
-    name: "Starter",
-    price: "Free",
+    id: "free",
+    name: "Free",
+    icon: Sparkles,
+    price: "$0",
     cadence: "forever",
-    blurb: "For creators testing the waters.",
+    blurb: "For creators testing what Hookify can do.",
     features: [
-      "5 clips per month",
-      "Up to 30-min uploads",
-      "Standard captions",
-      "720p exports",
-      "Watermark on export",
+      "60 minutes of source video / month",
+      "3–5 AI clip ideas per upload",
+      "Real Whisper + Claude analysis",
+      "720p exports (watermarked)",
+      "Workspace + saved clips",
     ],
     cta: "Start free",
     featured: false,
   },
   {
-    id: "creator",
-    name: "Creator",
-    price: "$24",
+    id: "starter",
+    name: "Starter",
+    icon: Zap,
+    price: "$12",
     cadence: "per month",
-    blurb: "For working creators shipping weekly.",
+    blurb: "For solo creators publishing weekly.",
     features: [
-      "120 clips per month",
-      "Up to 4-hour uploads",
-      "All 7 caption styles",
-      "1080p watermark-free exports",
-      "Viral score & A/B titles",
-      "Brand kits (3 presets)",
+      "180 minutes of source video / month",
+      "Unlimited clip ideas",
+      "1080p exports, no watermark",
+      "Caption presets & brand tone",
+      "Email support",
     ],
-    cta: "Start 7-day trial",
+    cta: "Start with Starter",
+    featured: false,
+  },
+  {
+    id: "pro",
+    name: "Pro",
+    icon: Crown,
+    price: "$29",
+    cadence: "per month",
+    blurb: "For working creators shipping daily.",
+    features: [
+      "500 minutes of source video / month",
+      "Virality scoring on every clip",
+      "Branding kit (logos, colors, fonts)",
+      "Per-clip analytics",
+      "Priority render queue",
+    ],
+    cta: "Go Pro",
     featured: true,
   },
   {
-    id: "studio",
-    name: "Studio",
+    id: "business",
+    name: "Business",
+    icon: Building2,
     price: "$79",
     cadence: "per month",
     blurb: "For podcasts, teams and agencies.",
     features: [
-      "Unlimited clips",
-      "Up to 8-hour uploads",
-      "Custom caption styles",
-      "4K exports + API access",
+      "2,000 minutes of source video / month",
+      "Team seats (up to 5)",
+      "Priority + parallel processing",
       "Speaker diarisation",
-      "Priority queue & dedicated CSM",
+      "API access + dedicated success",
     ],
-    cta: "Start 7-day trial",
+    cta: "Talk to us",
     featured: false,
   },
 ];
@@ -61,48 +79,60 @@ export default function PricingCards({ inSection = true }) {
     <Wrapper id="pricing" className={inSection ? "relative py-28" : ""} data-testid="section-pricing">
       <div className="mx-auto max-w-7xl px-6 lg:px-10">
         <div className="max-w-2xl mb-14">
-          <div className="text-xs font-bold uppercase tracking-[0.2em] text-volt mb-4">Pricing</div>
+          <div className="text-xs font-bold uppercase tracking-[0.2em] text-purple-300 mb-4">Pricing</div>
           <h2 className="font-heading text-3xl sm:text-4xl lg:text-5xl font-medium tracking-tight">Plans built around how much you actually ship.</h2>
-          <p className="mt-4 text-zinc-400">Cancel anytime. Yearly saves 22%. All plans include unlimited exports to TikTok, Shorts and Reels.</p>
+          <p className="mt-4 text-zinc-400">Cancel anytime. All paid plans include unlimited exports to TikTok, YouTube Shorts and Instagram Reels.</p>
         </div>
 
-        <div className="grid md:grid-cols-3 gap-5">
-          {PLANS.map((p) => (
-            <div
-              key={p.id}
-              className={`relative rounded-lg p-8 border ${p.featured ? "bg-volt text-black border-volt" : "bg-ink-900 border-white/5"}`}
-              data-testid={`plan-${p.id}`}
-            >
-              {p.featured && (
-                <div className="absolute -top-3 left-8 bg-black text-volt text-[10px] font-bold uppercase tracking-[0.2em] px-2 py-1 rounded-sm">Most popular</div>
-              )}
-              <div className={`text-xs font-bold uppercase tracking-[0.2em] ${p.featured ? "text-black/60" : "text-zinc-500"}`}>{p.name}</div>
-              <div className="mt-4 flex items-end gap-1">
-                <span className={`font-heading text-5xl font-medium ${p.featured ? "text-black" : "text-white"}`}>{p.price}</span>
-                {p.cadence && <span className={`text-sm mb-2 ${p.featured ? "text-black/60" : "text-zinc-500"}`}>/{p.cadence}</span>}
-              </div>
-              <p className={`mt-3 text-sm ${p.featured ? "text-black/70" : "text-zinc-400"}`}>{p.blurb}</p>
-
-              <Link
-                to="/signup"
-                className={`mt-7 block text-center rounded-md py-3 text-sm font-medium transition-colors ${
-                  p.featured ? "bg-black text-volt hover:bg-zinc-900" : "bg-volt text-black hover:bg-volt-300"
-                }`}
-                data-testid={`plan-${p.id}-cta`}
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-5">
+          {PLANS.map((p) => {
+            const Icon = p.icon;
+            return (
+              <div
+                key={p.id}
+                className={`relative rounded-2xl p-7 border ${p.featured ? "border-purple/60 bg-gradient-to-br from-purple/15 via-ink-900 to-ink-900 ring-brand" : "bg-ink-900 border-white/5"}`}
+                data-testid={`plan-${p.id}`}
               >
-                {p.cta}
-              </Link>
+                {p.featured && (
+                  <div className="absolute -top-3 left-7 btn-brand text-[10px] font-bold uppercase tracking-[0.2em] px-2.5 py-1 rounded-md">Most popular</div>
+                )}
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${p.featured ? "btn-brand" : "bg-purple/10 border border-purple/20"}`}>
+                    <Icon className={`w-4 h-4 ${p.featured ? "text-white" : "text-purple-300"}`} />
+                  </div>
+                  <div className="text-xs font-bold uppercase tracking-[0.2em] text-zinc-300">{p.name}</div>
+                </div>
+                <div className="mt-5 flex items-end gap-1">
+                  <span className="font-heading text-4xl font-medium text-white">{p.price}</span>
+                  {p.cadence && <span className="text-xs mb-2 text-zinc-500">/{p.cadence}</span>}
+                </div>
+                <p className="mt-3 text-sm text-zinc-400 min-h-[44px]">{p.blurb}</p>
 
-              <ul className="mt-8 space-y-3">
-                {p.features.map((f) => (
-                  <li key={f} className={`flex items-start gap-2.5 text-sm ${p.featured ? "text-black/80" : "text-zinc-300"}`}>
-                    <Check className={`w-4 h-4 shrink-0 mt-0.5 ${p.featured ? "text-black" : "text-volt"}`} strokeWidth={2.5} />
-                    {f}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
+                <Link
+                  to="/signup"
+                  className={`mt-6 block text-center rounded-md py-3 text-sm font-medium transition-all ${
+                    p.featured ? "btn-brand" : "border border-white/10 hover:border-purple/40 hover:bg-purple/5 text-zinc-200"
+                  }`}
+                  data-testid={`plan-${p.id}-cta`}
+                >
+                  {p.cta}
+                </Link>
+
+                <ul className="mt-7 space-y-2.5">
+                  {p.features.map((f) => (
+                    <li key={f} className="flex items-start gap-2.5 text-sm text-zinc-300">
+                      <Check className={`w-4 h-4 shrink-0 mt-0.5 ${p.featured ? "text-volt" : "text-purple-300"}`} strokeWidth={2.5} />
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-10 text-center text-xs text-zinc-500">
+          Stripe checkout coming soon — for now every plan starts in Free mode. Reply to your welcome email and we'll grade you up.
         </div>
       </div>
     </Wrapper>

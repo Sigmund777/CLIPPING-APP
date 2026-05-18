@@ -15,6 +15,7 @@ import TemplatesPage from "./pages/TemplatesPage";
 import SettingsPage from "./pages/SettingsPage";
 import WorkspacePage from "./pages/WorkspacePage";
 import BetaRequestsPage from "./pages/BetaRequestsPage";
+import AuthCallbackPage from "./pages/AuthCallbackPage";
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -69,6 +70,7 @@ export default function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/signup" element={<SignupPage />} />
             <Route path="/pricing" element={<PricingPage />} />
+            <Route path="/auth/callback" element={<AuthCallbackPage />} />
             <Route path="/dashboard" element={<Protected><DashboardPage /></Protected>} />
             <Route path="/upload" element={<Protected><UploadPage /></Protected>} />
             <Route path="/templates" element={<Protected><TemplatesPage /></Protected>} />

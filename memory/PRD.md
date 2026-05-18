@@ -1,73 +1,68 @@
-# Hookify AI — Product Requirements Document
+# Hookify AI — Product Requirements Document (v3)
 
-## Original Problem Statement
-A SaaS web app that turns long-form video into short-form clips (TikTok / YouTube Shorts / Instagram Reels). Real auth, real upload, real Whisper transcription, real Claude clip suggestions, real FFmpeg 9:16 render with burnt captions, downloadable MP4, per-user workspace.
+_Last updated: Feb 18, 2026_
 
-## Architecture (Feb 17, 2026 — v1)
-- **Frontend** (Vercel-deployable): React 19 + Tailwind + Shadcn. `frontend/src/`
-- **Backend** (Railway/Render-deployable): FastAPI + MongoDB (Motor async) + FFmpeg subprocess. `backend/server.py`
-- **Auth**: JWT in httpOnly cookies, bcrypt. Local-session fallback only when backend is literally unreachable.
-- **AI**: OpenAI Whisper (transcription) + Claude Sonnet 4.5 (clip ideas) — both via `EMERGENT_LLM_KEY`.
-- **Object storage**: Emergent Object Storage. Source videos + rendered MP4s persist across redeploys.
-- **Render**: subprocess FFmpeg with centered 9:16 crop → 1080×1920 → burnt SRT captions (volt-yellow). Background asyncio task with DB-backed job state and polling.
+## Original problem statement
+A SaaS web app that turns long-form video into short-form clips for TikTok, YouTube Shorts, and Instagram Reels. Brand: dark + vibrant purple + teal/cyan neon. Premium feel, OpusClip-grade.
 
-## Core User Journey (works end-to-end)
-1. Register / log in (real backend, JWT cookie)
-2. Upload an mp4/mov/mp3/wav/m4a ≤ 25 MB → backend saves source to object storage
-3. Whisper transcribes
-4. Claude returns 3–5 honest clip ideas (title, hook, caption, platform, confidence, reason)
-5. Open any idea in the editor → edit fields → "Save clip" persists to localStorage workspace
-6. "Generate clip" → backend cuts the source, reframes 9:16, burns captions, uploads MP4 to storage
-7. "Download MP4" delivers the file (cookie-authed)
+## Architecture (v3)
+- **Frontend** (Vercel): React 19 + Tailwind + Shadcn + Supabase JS
+- **Backend** (Railway/Render): FastAPI + supabase-py + FFmpeg subprocess
+- **Auth**: Supabase Auth (email/password + Google OAuth provider stub)
+- **DB**: Supabase Postgres (5 tables, RLS scoped per user)
+- **Storage**: Supabase Storage (`hookify-sources`, `hookify-renders` — private, RLS-scoped)
+- **AI**: OpenAI Whisper + Claude Sonnet 4.5 via Emergent LLM key
 
-## What's Implemented (v1 — Feb 17, 2026)
-### Backend endpoints
-- `POST /api/auth/register|login|logout`, `GET /api/auth/me` (real JWT)
-- `POST /api/ai/analyze` — multipart upload → Whisper → Claude → persists `ai_project` with `storage_path`
-- `GET /api/projects`, `GET /api/projects/{id}` — user history
-- `POST /api/render/start` — kicks off background FFmpeg
-- `GET /api/render/{job_id}` — poll progress (8 stages)
-- `GET /api/render/{job_id}/download` — stream MP4 (cookie/header/query auth)
-- `GET|POST|PATCH|DELETE /api/saved-clips` — per-user workspace CRUD
-- `GET|PUT /api/settings` — per-user preferences
+## Core user journey
+1. Sign up (email + password) — instant, no verification (toggle-able later)
+2. Upload mp4/mov/mp3/wav/m4a up to 100 MB directly to Supabase Storage (XHR with progress)
+3. Backend downloads file from storage → Whisper transcribes → Claude returns 3–5 clip ideas
+4. Open any idea in the editor → edit title/hook/caption/platform/status
+5. "Generate clip" → backend cuts source, applies centered 9:16 crop, burns teal captions, uploads MP4 to storage
+6. "Download MP4" hits `/api/render/{id}/download-url` → signed Supabase URL → browser downloads
+7. Saved clips workspace, settings, templates persist per user
+
+## What's implemented (v3, Feb 18 2026)
+### Backend (`backend/server.py` — rewritten)
+- `GET /api/auth/me` — verifies Supabase JWT
+- `POST /api/ai/analyze` — body `{source_key, filename, content_type}` → Whisper + Claude
+- `GET /api/projects`, `GET /api/projects/{id}`
+- `POST /api/render/start`, `GET /api/render/{job_id}`, `GET /api/render/{job_id}/download-url`
+- `GET|POST|PATCH|DELETE /api/saved-clips`
+- `GET|PUT /api/settings`
+- `GET /api/profile` — profile + usage + recent projects (for dashboard)
 
 ### Frontend
-- Landing, Login, Signup, Pricing
-- Dashboard with upload card + project list + clip ideas + Join Beta CTA
-- Upload page with 6-stage pipeline UI + real `/api/ai/analyze` call + drag-drop
-- Editor with editable fields + "Generate clip" + 8-stage render progress + "Download MP4"
-- Workspace page (saved clips, platform/status filters, edit/delete)
-- Templates + Settings (currently localStorage on FE; backend endpoints ready to wire)
-- Beta requests admin page
-- Watch Demo + Join Beta dialogs
+- Landing, Login, Signup, Pricing, Auth Callback
+- Dashboard with usage bar (purple→teal gradient), 3 stat cards, big upload CTA, projects list, clip ideas grid
+- Upload page with direct-to-Supabase XHR upload + progress + 6 stages
+- Editor with editable fields + 8-stage render pipeline + signed-URL download
+- Workspace, Templates, Settings, Beta Requests (still localStorage; backend ready)
 
-## What's Fallback / Not Yet
-- Google OAuth — endpoint exists, no real callback (clearly labelled demo)
-- Email verification on register — not implemented
-- Password reset — not implemented
-- Stripe checkout — not wired
-- FE WorkspacePage/SettingsPage still localStorage (backend ready to swap)
-- Smart re-framing (face/speaker tracking)
-- Fancy captions (karaoke, animated)
+## What's fallback / unfinished
+- **Google OAuth**: button wired, but provider not enabled in Supabase yet
+- **Stripe checkout**: visual tiers only
+- **Email verification**: disabled at user's request
+- **Password reset**: not implemented
+- **WorkspacePage / SettingsPage / TemplatesPage**: localStorage on FE (backend endpoints exist)
+- **Smart re-framing**: v1 uses centered crop
 
-## Test Credentials
-See `/app/memory/test_credentials.md`
+## Required env vars
+See `/app/memory/DEPLOYMENT_REPORT.md`
 
-## Deployment Guide
-See `/app/memory/DEPLOYMENT_REPORT.md` — exhaustive env vars, hosting, FFmpeg setup, test steps.
+## Test credentials
+None — Supabase Auth means real signup is required. The previous JWT/Mongo demo creds (`creator@clipforge.ai`) no longer work.
 
-## Prioritized Backlog
-### P1 (next session)
-- Email verification (SendGrid/Resend) + password reset
-- Migrate WorkspacePage + SettingsPage frontend to call `/api/saved-clips` and `/api/settings`
-- Inline `<video>` preview of rendered MP4 in the editor (no download required to watch)
-- Stripe checkout for paid tiers
+## Prioritized backlog
+- **P1**: Backend deploy to Railway (so Vercel frontend has a live API to talk to)
+- **P1**: Migrate FE Workspace/Settings/Templates to Supabase
+- **P1**: Stripe checkout
+- **P2**: Real Google OAuth wiring
+- **P2**: Email verification + password reset
+- **P2**: Smart re-framing + karaoke captions
+- **P3**: Multi-language captions, team workspaces, analytics
 
-### P2
-- Smart re-framing (face / speaker tracking)
-- Karaoke / animated word-by-word captions
-- Multi-language captions / translation
-- Team workspaces
-- Analytics dashboard (post-publish performance)
-- Real Google OAuth
-- Direct-to-storage signed-URL uploads (raise the 25 MB cap)
+## Manual setup remaining
+1. Paste `/app/memory/supabase_schema.sql` into Supabase SQL Editor (one click)
+2. (Later) Enable Google OAuth provider in Supabase
+3. (Later) Deploy backend to Railway / Render

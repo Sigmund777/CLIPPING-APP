@@ -5,7 +5,7 @@
 @tailwind utilities;
 
 html, body, #root {
-    background-color: #09090B;
+    background-color: #0A0A12;
     color: #FAFAFA;
 }
 
@@ -14,6 +14,11 @@ body {
     font-family: 'Manrope', ui-sans-serif, system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    background:
+        radial-gradient(900px circle at 20% -10%, rgba(168, 85, 247, 0.12), transparent 55%),
+        radial-gradient(900px circle at 100% 100%, rgba(34, 211, 238, 0.10), transparent 55%),
+        #0A0A12;
+    background-attachment: fixed;
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -21,61 +26,82 @@ h1, h2, h3, h4, h5, h6 {
     letter-spacing: -0.02em;
 }
 
-/* Selection */
+/* Selection — purple */
 ::selection {
-    background: #CCFF00;
-    color: #000;
+    background: #A855F7;
+    color: #fff;
 }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: #09090B; }
-::-webkit-scrollbar-thumb { background: #27272A; border-radius: 8px; }
-::-webkit-scrollbar-thumb:hover { background: #3F3F46; }
+::-webkit-scrollbar-track { background: #0A0A12; }
+::-webkit-scrollbar-thumb { background: #2A2A3A; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #3F3F4F; }
 
 @layer base {
     :root {
-        --background: 240 6% 4%;
+        --background: 240 22% 6%;
         --foreground: 0 0% 98%;
-        --card: 240 4% 9%;
+        --card: 240 18% 9%;
         --card-foreground: 0 0% 98%;
-        --popover: 240 4% 9%;
+        --popover: 240 18% 9%;
         --popover-foreground: 0 0% 98%;
-        --primary: 73 100% 50%;
-        --primary-foreground: 0 0% 4%;
-        --secondary: 240 4% 12%;
+        /* primary -> purple #A855F7 */
+        --primary: 271 91% 65%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 240 14% 14%;
         --secondary-foreground: 0 0% 98%;
-        --muted: 240 4% 14%;
-        --muted-foreground: 240 5% 64%;
-        --accent: 240 4% 14%;
-        --accent-foreground: 0 0% 98%;
+        --muted: 240 12% 16%;
+        --muted-foreground: 240 5% 70%;
+        --accent: 187 85% 53%;             /* teal/cyan */
+        --accent-foreground: 0 0% 0%;
         --destructive: 0 84% 60%;
         --destructive-foreground: 0 0% 98%;
-        --border: 240 4% 16%;
-        --input: 240 4% 16%;
-        --ring: 73 100% 50%;
-        --radius: 0.5rem;
+        --border: 240 12% 18%;
+        --input: 240 12% 16%;
+        --ring: 271 91% 65%;
+        --radius: 0.625rem;
     }
     .dark {
-        --background: 240 6% 4%;
+        --background: 240 22% 6%;
         --foreground: 0 0% 98%;
     }
     * { @apply border-border; }
     body { @apply bg-background text-foreground; }
 }
 
-/* Volt glow utility */
+/* Brand utilities — repurposed from old "volt" tokens to teal/cyan */
 .volt-glow {
-    box-shadow: 0 0 0 1px rgba(204, 255, 0, 0.25), 0 0 40px -10px rgba(204, 255, 0, 0.5);
+    box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.3), 0 0 40px -10px rgba(34, 211, 238, 0.55);
 }
-.text-volt { color: #CCFF00; }
-.bg-volt { background-color: #CCFF00; }
-.border-volt { border-color: #CCFF00; }
+.text-volt { color: #22D3EE; }
+.bg-volt { background-color: #22D3EE; }
+.bg-volt-300 { background-color: #67E8F9; }
+.border-volt { border-color: #22D3EE; }
+
+/* Brand purple */
+.text-brand-purple { color: #A855F7; }
+.bg-brand-purple { background-color: #A855F7; }
+
+/* Primary CTA gradient — purple → cyan */
+.btn-brand {
+    background-image: linear-gradient(135deg, #A855F7 0%, #22D3EE 100%);
+    color: #ffffff;
+    transition: filter 200ms ease, transform 200ms ease, box-shadow 200ms ease;
+    box-shadow: 0 8px 32px -12px rgba(168, 85, 247, 0.55);
+}
+.btn-brand:hover {
+    filter: brightness(1.08) saturate(1.1);
+    transform: translateY(-1px);
+    box-shadow: 0 12px 40px -10px rgba(168, 85, 247, 0.75);
+}
+.btn-brand:active { transform: translateY(0); }
+
+/* Ring used on hover/focus across cards */
+.ring-brand { box-shadow: 0 0 0 1px rgba(168, 85, 247, 0.35), 0 0 24px -6px rgba(34, 211, 238, 0.35); }
 
 /* Grain overlay */
-.grain {
-    position: relative;
-}
+.grain { position: relative; }
 .grain::after {
     content: "";
     position: absolute; inset: 0;
@@ -84,12 +110,20 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .dot-grid {
-    background-image: radial-gradient(rgba(255,255,255,0.07) 1px, transparent 1px);
+    background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
     background-size: 24px 24px;
 }
 
 .caption-pill {
-    background: rgba(0,0,0,0.65);
-    backdrop-filter: blur(8px);
-    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(10, 10, 18, 0.7);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(168, 85, 247, 0.2);
 }
+
+/* Shimmer for loading rows */
+.shimmer {
+    background: linear-gradient(90deg, rgba(168,85,247,0.05), rgba(34,211,238,0.20), rgba(168,85,247,0.05));
+    background-size: 200% 100%;
+    animation: shimmer 2.5s linear infinite;
+}
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }

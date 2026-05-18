@@ -1,169 +1,166 @@
-# Hookify AI — v1 Production Readiness Report
+# Hookify v3 — Vercel/Supabase Deployment Report
 
-_Last updated: Feb 17, 2026_
+_Built Feb 18, 2026_
 
-## 1. What is fully working (verified end-to-end)
+## Status snapshot
 
-| Capability | Endpoint / Surface | Status |
+✅ **Frontend rebranded** to dark + vibrant purple/cyan neon. Premium feel, OpusClip-grade visuals on the landing, login, pricing, and dashboard.
+✅ **Auth migrated** to Supabase Auth (email/password + Google OAuth stub).
+✅ **Storage migrated** to Supabase Storage with direct-from-browser uploads (no Vercel body limit).
+✅ **Backend Supabase-aware**: validates Supabase JWTs, reads/writes Supabase Postgres + Storage, runs FFmpeg locally and uploads renders back to storage.
+✅ **Pricing tiers updated**: Free 60min / Starter $12 / Pro $29 / Business $79.
+✅ **Dashboard rebuilt** with real usage stats, clip history, prominent upload CTA.
+
+⚠️ **ONE MANUAL STEP LEFT BEFORE FULL E2E**: paste the SQL schema in your Supabase SQL Editor. See "Next step" below.
+
+## What's fully working (verified in preview)
+
+- Landing page, pricing page, login page, signup page — purple/cyan rebrand looks premium ✅
+- Supabase JS client initialized, auth state persists across refresh
+- Backend boots cleanly with Supabase + FFmpeg
+- Frontend builds with zero runtime errors
+- Storage buckets `hookify-sources` and `hookify-renders` exist (confirmed via API)
+- All visual contrast, button states, and CTA gradients live
+
+## What's still pending (one action from you)
+
+### 🚨 Paste the SQL schema
+
+The Supabase Postgres tables that hold profiles, ai_projects, saved_clips, render_jobs, and user_settings don't exist yet. I can verify the schema file via the service-role API, but I cannot create tables programmatically without your DB password (which Supabase never exposes via API).
+
+**Action**:
+1. Open https://supabase.com/dashboard/project/raaxstgbhpgdlszkalfc/sql/new
+2. Open the file `/app/memory/supabase_schema.sql` in this Emergent workspace.
+3. Copy its **entire contents** (~120 lines).
+4. Paste into the SQL Editor and click **Run**.
+5. Expected output: "Success. No rows returned."
+6. Reply here with "schema is in" and I'll run a full E2E test (signup → upload → analyze → render → download).
+
+The SQL is idempotent (safe to re-run) and creates:
+- 5 tables with RLS scoped to the authenticated user
+- A trigger that auto-creates a `profiles` row on every new signup
+- 2 storage policies that scope source/render objects to each user's UID folder
+
+### Other things still flagged as fallback
+
+- **Google OAuth UI**: button present, but you haven't enabled the Google provider in Supabase yet. It'll show a friendly error when clicked. Enable later under Supabase → Auth → Providers → Google.
+- **Stripe checkout**: pricing tiers are visual only; every signup starts on Free. Stripe is documented as P1 next.
+- **Email verification**: you disabled it on signup, which is fine for beta but turn it on before public launch.
+
+## Architecture (post-migration)
+
+```
+Frontend (Vercel)                           Backend (Railway / Render / Emergent preview)
+─────────────────                           ──────────────────────────────────────────────
+React + Supabase JS                         FastAPI + supabase-py + FFmpeg
+- supabase.auth (email/Google)              - /api/auth/me            verify Supabase JWT
+- supabase.storage (direct upload)          - /api/ai/analyze         download from storage,
+                                                                       Whisper → Claude → DB
+                                            - /api/render/start       FFmpeg 9:16 + captions
+                                            - /api/render/{id}        poll status
+                                            - /api/render/{id}/download-url  signed URL
+                                            - /api/saved-clips CRUD
+                                            - /api/settings           upsert
+                                            - /api/projects           list
+
+Storage (Supabase)                          Database (Supabase Postgres)
+──────────────────                          ────────────────────────────
+hookify-sources/{uid}/{file}                profiles, ai_projects, saved_clips,
+hookify-renders/{uid}/{job}.mp4             render_jobs, user_settings
+```
+
+## Required env vars
+
+### Backend (`backend/.env` — already populated in preview)
+```
+SUPABASE_URL=https://raaxstgbhpgdlszkalfc.supabase.co
+SUPABASE_ANON_KEY=sb_publishable_...
+SUPABASE_SERVICE_ROLE_KEY=sb_secret_...
+SUPABASE_JWT_SECRET=(reserved; not used for verification in this build)
+EMERGENT_LLM_KEY=sk-emergent-...
+SOURCES_BUCKET=hookify-sources
+RENDERS_BUCKET=hookify-renders
+FRONTEND_URL=https://clipping-app-five.vercel.app
+```
+
+### Frontend (`frontend/.env` — already populated)
+```
+REACT_APP_BACKEND_URL=<your backend host>
+REACT_APP_SUPABASE_URL=https://raaxstgbhpgdlszkalfc.supabase.co
+REACT_APP_SUPABASE_ANON_KEY=sb_publishable_...
+REACT_APP_SOURCES_BUCKET=hookify-sources
+REACT_APP_RENDERS_BUCKET=hookify-renders
+```
+
+## Hosting reality (unchanged from last build)
+
+| Layer | Host | Reason |
 |---|---|---|
-| Email/password sign-up | `POST /api/auth/register` | ✅ Real, bcrypt-hashed, JWT in httpOnly cookies, session survives refresh |
-| Email/password login + logout | `POST /api/auth/login`, `POST /api/auth/logout` | ✅ Real, with friendly local-fallback only if backend literally unreachable |
-| Session check on refresh | `GET /api/auth/me` | ✅ Real |
-| Protected routes redirect to /login | `App.js Protected` | ✅ Real |
-| Long-form video upload (mp4/mov/mp3/wav/m4a, ≤25 MB MVP) | `POST /api/ai/analyze` | ✅ Real (multipart, with progress on the UI) |
-| Whisper transcription (segments + timestamps) | OpenAI Whisper via Emergent LLM key | ✅ Real |
-| AI clip suggestions (3–5, real fields) | Claude Sonnet 4.5 via Emergent LLM key | ✅ Real |
-| Source video persisted across redeploys | Emergent Object Storage at `clipforge/sources/{user}/{project}.{ext}` | ✅ Real |
-| 9:16 vertical render with burnt captions | FFmpeg pipeline (centered crop → 1080×1920 + SRT burn-in volt-yellow) | ✅ Real, verified — output is H.264/AAC 1080×1920 |
-| Render progress polling (8 stages) | `GET /api/render/{job_id}` | ✅ Real |
-| Final MP4 stored back to object storage | `clipforge/renders/{user}/{job}.mp4` | ✅ Real |
-| MP4 download | `GET /api/render/{job_id}/download` | ✅ Real (cookie/header/query-token auth) |
-| Saved clips workspace (CRUD) | `/api/saved-clips` GET/POST/PATCH/DELETE | ✅ Real, per-user, soft-delete |
-| Settings per user | `/api/settings` GET/PUT | ✅ Real |
-| Projects list (history) | `/api/projects`, `/api/projects/{id}` | ✅ Real |
+| Frontend | **Vercel** | Already at https://clipping-app-five.vercel.app |
+| Backend | **Railway / Render / Fly.io** | FFmpeg + long-running render jobs ≠ Vercel |
+| DB | **Supabase Postgres** | ✅ already set up |
+| Auth | **Supabase Auth** | ✅ already set up |
+| Storage | **Supabase Storage** | ✅ already set up |
 
-## 2. What is still fallback / demo
+### To deploy backend to Railway (recommended)
 
-| Item | Why | Where |
-|---|---|---|
-| Anonymous "demo" preview when backend unreachable | Intentional graceful fallback so the landing page + editor never break in offline preview mode | `auth.jsx`, `mockData.js` |
-| Mocked `/api/ai/transcript` and `/api/ai/suggestions` (legacy endpoints) | Kept only to support old saved clips that don't have a real `project_id`. New uploads go through `/api/ai/analyze` which is fully real. | `server.py` lines 305-314 |
-| Google login | Endpoint exists but uses a simulated Google profile post — **no real OAuth callback wired**. Clearly says "demo" in the UI hint. | `server.py /auth/google`, `auth.jsx googleAuth` |
-| Email verification on register | **Not implemented** — new users are auto-logged-in without verifying their email. Add SendGrid/Resend before public launch. | n/a |
-| Templates / Settings on the frontend | Settings are now backend-persisted via `/api/settings` (server-side), but the **frontend pages still write to localStorage** for instant feedback. Migrating the FE to call the server endpoints is a small follow-up. | `SettingsPage.jsx`, `TemplatesPage.jsx` |
-| Workspace pulls localStorage | Backend endpoints exist (`/api/saved-clips`) but the FE WorkspacePage still reads localStorage. Switching it over is a 30-min follow-up. | `WorkspacePage.jsx` |
-| Smart re-framing (face/speaker tracking) | Out of v1 scope. v1 uses centered 9:16 crop. | `_run_render_job` in `server.py` |
-| Fancy caption styles (karaoke, animated word-by-word) | Out of v1 scope. v1 uses a single burnt-in SRT block, volt-yellow on shadow. | `_run_render_job` |
-| Render preview before download | Not yet — user has to download the MP4 to watch. Adding an inline `<video>` from the storage URL is a simple v1.1 add. | `ClipEditorPage.jsx` |
-
-## 3. Where files are stored & persistence
-
-| File type | Where | Persists across redeploys? |
-|---|---|---|
-| User accounts, sessions, settings | MongoDB | ✅ Yes |
-| Saved clips, render jobs, AI projects | MongoDB | ✅ Yes |
-| Uploaded source videos | Emergent Object Storage (`clipforge/sources/...`) | ✅ Yes |
-| Rendered MP4s | Emergent Object Storage (`clipforge/renders/...`) | ✅ Yes |
-| FFmpeg scratch (intermediate frames, SRT) | `tempfile.mkdtemp()` inside the backend container | ❌ Wiped after each render (intended) |
-
-## 4. Required environment variables
-
-| Var | Used by | Required? | Source |
-|---|---|---|---|
-| `MONGO_URL` | Backend Mongo connection | ✅ Required | Your Mongo Atlas / Railway / Render Mongo |
-| `DB_NAME` | Mongo database name | ✅ Required | Any string, e.g. `clipforge_prod` |
-| `JWT_SECRET` | Signs auth tokens | ✅ Required | `openssl rand -hex 32` |
-| `EMERGENT_LLM_KEY` | Whisper, Claude, Object Storage | ✅ Required | Emergent dashboard → Profile → Universal Key |
-| `APP_NAME` | Storage path prefix | ✅ Required | `clipforge` or `hookify` |
-| `FRONTEND_URL` | CORS allow-list for browser | ✅ Required | Your Vercel domain (e.g. `https://hookify.vercel.app`) |
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Seeds an admin on first boot | ⚪ Optional | Default: `admin@clipforge.ai / ClipForge2026!` |
-| `TEST_USER_EMAIL`, `TEST_USER_PASSWORD` | Seeds a demo user | ⚪ Optional | Default: `creator@clipforge.ai / Creator2026!` |
-| `REACT_APP_BACKEND_URL` | Frontend → backend base URL | ✅ Required (frontend) | Your backend host (Railway/Render), **NOT Vercel** |
-
-## 5. Recommended live hosting setup
-
-**Vercel is fine for the frontend ONLY. It cannot host the backend.** Reasons:
-- Vercel serverless has a hard 4.5 MB request body limit (uploads up to 25 MB will 413).
-- Vercel functions cannot run FFmpeg jobs that take >10 seconds.
-- No persistent local disk between invocations.
-
-### Production stack we recommend
-
-| Layer | Service | Why |
-|---|---|---|
-| Frontend | **Vercel** | Free, instant deploys, CDN, env-var support. Just point at this repo's `/frontend` with output `build`. |
-| Backend (FastAPI + FFmpeg) | **Railway** or **Render** (or **Fly.io**) | Long-lived processes, FFmpeg binary, environment vars, persistent disk if needed |
-| Database | **MongoDB Atlas** (free M0) | Already wired via `MONGO_URL` |
-| Object storage | **Emergent Object Storage** (already wired) — or migrate to **Cloudflare R2 / S3** when scaling beyond Emergent's quotas | Persists across redeploys, accessed via the backend |
-
-You do **not** need a separate worker for v1 — FFmpeg runs inline as an asyncio task. When you scale past ~10 concurrent renders, move to a Celery/RQ worker on the same Railway service.
-
-## 6. Where to add env vars
-
-### In Emergent preview (what you're using now)
-- Backend: `/app/backend/.env` — already populated. Just keep `EMERGENT_LLM_KEY` valid (top up balance via Profile → Universal Key → Add Balance if it 502s).
-- Frontend: `/app/frontend/.env` — `REACT_APP_BACKEND_URL` is already set to the preview URL.
-
-### In Vercel (frontend)
-- **Project Settings → Environment Variables**:
-  - `REACT_APP_BACKEND_URL = https://your-backend-host.railway.app` (no trailing slash)
-- After adding, redeploy via the Vercel dashboard (`Deployments → … → Redeploy`).
-
-### In Railway / Render (backend)
-- Add every required var from §4 above.
-- For Railway: **New Service → Deploy from GitHub repo → /backend root**. Set the **Start Command** to:
-  ```
-  uvicorn server:app --host 0.0.0.0 --port $PORT
-  ```
-- Make sure FFmpeg is on the image. Railway/Render auto-detect Python, but **you need to add `ffmpeg` to the apt packages**. Add `nixpacks.toml` or `Aptfile`:
-  ```
-  # Aptfile (Render / Heroku-buildpack style)
-  ffmpeg
-  ```
-  Or for Railway with Nixpacks, add `nixpacks.toml`:
-  ```
-  [phases.setup]
-  aptPkgs = ["ffmpeg"]
-  ```
-
-## 7. Exact test steps (real user flow)
-
-1. Open the deployed frontend URL.
-2. Click **Start free** → register with `you@yourname.com` / `TestPass123!` / your name. **Should land on /dashboard.**
-3. Refresh the page. **Session must persist** (sidebar still shows your name).
-4. Click **Upload** → drop an MP4 ≤ 25 MB with clear English speech (a 30-90 sec podcast/YouTube clip works great).
-5. Watch the live pipeline. After 20–40 seconds you'll see **AI ANALYSIS COMPLETE** + 3–5 real clip ideas. Each card shows real title, hook, caption, platform, and confidence.
-6. Click **Open in editor** on any idea.
-7. The header should show **Generate clip** (active, volt-yellow). Click it.
-8. Watch the 8-stage render pipeline. ~3–10 seconds later (depending on duration) the button switches to **Download MP4**.
-9. Click **Download MP4**. A 1080×1920 H.264/AAC MP4 with burnt-in volt-yellow captions downloads.
-10. Click **Save clip**. Open **Workspace** in the sidebar — your clip appears with platform/status filters.
-11. Click **Settings** → change platform / caption style → **Save settings**. Refresh — values persist.
-12. Click **Templates** → pick one → it sets active template. Visit **Upload** — context strip shows the active template.
-13. Log out. Try to visit `/dashboard` directly. **Should redirect to /login.**
-
-If any of these don't work in your live env, check `/var/log/supervisor/backend.err.log` or your Railway/Render logs first.
-
-## 8. Exact GitHub + Vercel + Railway deployment steps
-
-### a) Save to GitHub
-In the Emergent chat input, click **Save to GitHub**, name your repo `hookify`, push to your GitHub.
-
-### b) Deploy backend to Railway
-1. https://railway.app → **New Project → Deploy from GitHub** → pick your `hookify` repo.
-2. **Root Directory**: `backend`
-3. **Start Command**: `uvicorn server:app --host 0.0.0.0 --port $PORT`
-4. Add a `nixpacks.toml` to the repo root or `backend/nixpacks.toml`:
+1. Push this repo to GitHub.
+2. https://railway.app → New Project → Deploy from GitHub → pick this repo.
+3. Root: `backend`. Start command: `uvicorn server:app --host 0.0.0.0 --port $PORT`.
+4. Add `nixpacks.toml` at repo root:
    ```toml
    [phases.setup]
    aptPkgs = ["ffmpeg"]
    ```
-5. Variables tab — paste all env vars from §4.
-6. Deploy. Note the public domain Railway gives you, e.g. `https://hookify-backend.up.railway.app`.
+5. Add **every** env var from the backend section above.
+6. After deploy, copy the Railway public URL.
+7. In Vercel → Project Settings → Environment Variables, set `REACT_APP_BACKEND_URL` to that URL and **redeploy** the frontend.
+8. In Supabase → Authentication → URL Configuration, add your Railway URL to **Additional Redirect URLs** if you wire Google later.
 
-### c) Deploy frontend to Vercel
-1. https://vercel.com → **New → Import** your GitHub repo.
-2. **Framework**: Create React App, **Root Directory**: `frontend`.
-3. **Build Command**: `yarn build` (or leave as default)
-4. **Environment Variables**:
-   - `REACT_APP_BACKEND_URL = https://hookify-backend.up.railway.app` (your Railway URL, no trailing slash)
-5. Deploy.
+## Exact test steps (after SQL is in)
 
-### d) MongoDB
-- Use **MongoDB Atlas free tier (M0)**. Get the `mongodb+srv://...` connection string and set it as `MONGO_URL` in Railway.
+1. Open https://clipping-app-five.vercel.app/signup → create a new account with a real email.
+2. You should land on `/dashboard`. Sidebar shows your initial + email.
+3. Refresh — session persists.
+4. Click "Choose a file" → drop a 30–90 sec mp4/mp3 with English speech (up to 100 MB).
+5. Upload progress bar fills in real time (direct-to-Supabase XHR with `.upload.onprogress`).
+6. Stages animate: Uploading → Extracting → Transcribing → Finding moments → Generating hooks → Complete.
+7. After 20–60 seconds, see 3–5 real clip cards with title/hook/caption/confidence.
+8. Click any "Open in editor" card.
+9. In the editor: hit "Generate clip" (top right) → render-pipeline panel shows 8 stages.
+10. After ~3–10 seconds, button becomes "Download MP4". Click → real 1080×1920 H.264/AAC MP4 with burnt cyan captions downloads.
+11. "Save clip" → visit Workspace from the sidebar → clip appears.
+12. Log out from the sidebar — `/dashboard` redirects to `/login`.
 
-### e) CORS
-- Set `FRONTEND_URL` in Railway to your final Vercel domain so the backend allows that origin.
+## Files changed this build
 
-## 9. Known limitations + next steps
+- `backend/server.py` — full rewrite for Supabase auth/storage/db
+- `backend/.env` — Supabase keys
+- `backend/requirements.txt` — added `supabase==2.30.0`
+- `frontend/.env` — Supabase keys + bucket names
+- `frontend/src/lib/supabase.js` — new (Supabase JS client)
+- `frontend/src/lib/auth.jsx` — Supabase AuthProvider
+- `frontend/src/lib/api.js` — attaches Supabase access token to every request
+- `frontend/src/pages/LoginPage.jsx` — purple/cyan brand, Supabase login
+- `frontend/src/pages/SignupPage.jsx` — purple/cyan brand, Supabase signup
+- `frontend/src/pages/UploadPage.jsx` — direct-to-Supabase upload with progress bar, 100 MB cap
+- `frontend/src/pages/DashboardPage.jsx` — real `/api/profile` + `/api/projects`, usage bar, upgrade CTA
+- `frontend/src/pages/AuthCallbackPage.jsx` — new (Google OAuth landing)
+- `frontend/src/pages/ClipEditorPage.jsx` — download via signed Supabase URL
+- `frontend/src/components/PricingCards.jsx` — Free/Starter/Pro/Business tiers
+- `frontend/src/components/Hero.jsx`, `Navbar.jsx`, `DashboardLayout.jsx` — gradient CTAs
+- `frontend/tailwind.config.js` — purple palette added, `volt` remapped to teal
+- `frontend/src/index.css` — new brand utilities (`btn-brand`, `ring-brand`, `shimmer`)
+- `frontend/src/App.js` — `/auth/callback` route
+- `memory/supabase_schema.sql` — SQL to paste in Supabase
 
-- **25 MB upload cap** — matches Whisper's hard limit. To support larger uploads, do client-side audio extraction (using ffmpeg.wasm) and send only the audio. Future v1.5.
-- **Render is synchronous on one machine** — fine up to ~10 concurrent. Move to Celery + Redis when you exceed that.
-- **No payment / pricing tier enforcement** — Pricing page exists, Stripe is not wired. Future v2.
-- **No email verification** — add SendGrid + a short verification link. ~1 hr.
-- **No password reset** — same. ~1 hr.
-- **Frontend WorkspacePage / SettingsPage still read localStorage** — backend endpoints are ready, just swap the calls. ~30 min each.
+## Cost of next steps
 
----
-
-**Bottom line**: The core promise — upload → transcribe → AI suggestions → real 9:16 MP4 with captions you can post to TikTok — works end-to-end against real services with persistent storage. The preview at `https://clipforge-ai-33.preview.emergentagent.com` is the live test surface. Ready for you to verify before pushing to GitHub.
+| Task | Time | Priority |
+|---|---|---|
+| Paste SQL (you) | 30 sec | 🔴 blocker |
+| Deploy backend to Railway | ~10 min | 🔴 for production |
+| Enable Google OAuth in Supabase + Google Cloud | ~15 min | 🟡 nice to have |
+| Stripe checkout for paid tiers | ~3 hrs | 🟡 revenue |
+| Email verification on signup | ~30 min | 🟡 before public launch |
+| Migrate WorkspacePage / SettingsPage from localStorage → Supabase | ~45 min | 🟢 polish |

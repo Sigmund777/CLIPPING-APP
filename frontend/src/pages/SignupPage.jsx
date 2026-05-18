@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useAuth, formatApiErrorDetail } from "../lib/auth";
+import { useAuth } from "../lib/auth";
 import { toast } from "sonner";
 import { Sparkles, Eye, EyeOff } from "lucide-react";
 
@@ -20,10 +20,10 @@ export default function SignupPage() {
     setLoading(true);
     try {
       await register(email, password, name);
-      toast.success("Account created — let's forge some clips");
+      toast.success("Account created — let's hook the internet");
       nav("/dashboard");
     } catch (err) {
-      setError(formatApiErrorDetail(err.response?.data?.detail) || err.message);
+      setError(err?.message || "Could not create account.");
     } finally {
       setLoading(false);
     }
@@ -32,10 +32,8 @@ export default function SignupPage() {
   const google = async () => {
     try {
       await googleAuth();
-      toast.success("Account created with Google");
-      nav("/dashboard");
     } catch (err) {
-      setError(formatApiErrorDetail(err.response?.data?.detail) || err.message);
+      setError(err?.message || "Google sign-up unavailable.");
     }
   };
 
@@ -43,8 +41,10 @@ export default function SignupPage() {
     <div className="min-h-screen flex bg-ink-950 text-white" data-testid="signup-page">
       <div className="hidden lg:flex flex-1 flex-col justify-between p-12 border-r border-white/5 relative overflow-hidden">
         <div className="absolute inset-0 dot-grid opacity-30" />
+        <div className="absolute -top-32 -left-32 w-[480px] h-[480px] bg-purple/20 rounded-full blur-3xl" />
+        <div className="absolute -bottom-32 -right-32 w-[480px] h-[480px] bg-volt/10 rounded-full blur-3xl" />
         <Link to="/" className="relative flex items-center gap-2 w-fit">
-          <div className="w-8 h-8 rounded-md bg-volt flex items-center justify-center"><Sparkles className="w-4 h-4 text-black" strokeWidth={2.5} /></div>
+          <div className="w-8 h-8 rounded-md btn-brand flex items-center justify-center"><Sparkles className="w-4 h-4 text-white" strokeWidth={2.5} /></div>
           <span className="font-heading font-semibold text-lg">Hookify<span className="text-volt">.</span></span>
         </Link>
         <div className="relative max-w-md space-y-6">
@@ -97,7 +97,7 @@ export default function SignupPage() {
 
           {error && <div className="text-xs text-red-400 bg-red-500/5 border border-red-500/20 rounded-md px-3 py-2" data-testid="signup-error">{error}</div>}
 
-          <button type="submit" disabled={loading} className="w-full bg-volt text-black font-medium py-3 rounded-md hover:bg-volt-300 transition-colors disabled:opacity-50" data-testid="signup-submit">
+          <button type="submit" disabled={loading} className="w-full btn-brand font-medium py-3 rounded-md disabled:opacity-50" data-testid="signup-submit">
             {loading ? "Creating account…" : "Create account"}
           </button>
 

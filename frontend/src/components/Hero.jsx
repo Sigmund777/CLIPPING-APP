@@ -32,7 +32,7 @@ export default function Hero() {
           </p>
 
           <div className="mt-9 flex flex-wrap items-center gap-4">
-            <Link to="/signup" className="inline-flex items-center gap-2 bg-volt text-black font-medium px-6 py-3.5 rounded-md hover:bg-volt-300 transition-colors group" data-testid="hero-cta-primary">
+            <Link to="/signup" className="inline-flex items-center gap-2 btn-brand font-medium px-6 py-3.5 rounded-md group" data-testid="hero-cta-primary">
               Try the beta free
               <ArrowUpRight className="w-4 h-4 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
             </Link>
