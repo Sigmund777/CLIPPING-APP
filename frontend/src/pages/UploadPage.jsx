@@ -39,6 +39,8 @@ async function uploadWithProgress(file, key, onProgress) {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url, true);
     xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    // Supabase requires both the API key AND the user's bearer token for storage writes.
+    xhr.setRequestHeader("apikey", process.env.REACT_APP_SUPABASE_ANON_KEY);
     xhr.setRequestHeader("x-upsert", "true");
     xhr.setRequestHeader("Content-Type", file.type || "video/mp4");
     xhr.upload.onprogress = (e) => {
@@ -48,7 +50,18 @@ async function uploadWithProgress(file, key, onProgress) {
     };
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else reject(new Error(`Upload failed (${xhr.status}): ${xhr.responseText?.slice(0, 200)}`));
+      else {
+        // Parse a friendlier message from Supabase's error body.
+        let msg = `Upload failed (${xhr.status})`;
+        try {
+          const body = JSON.parse(xhr.responseText || "{}");
+          if (body.message) msg = body.message;
+          if (String(body.message || "").toLowerCase().includes("row-level security")) {
+            msg = "Supabase Storage RLS rejected the upload. Paste storage_fix.sql in your Supabase SQL Editor to install the upload policies, then retry.";
+          }
+        } catch (_) {}
+        reject(new Error(msg));
+      }
     };
     xhr.onerror = () => reject(new Error("Network error during upload"));
     xhr.send(file);
