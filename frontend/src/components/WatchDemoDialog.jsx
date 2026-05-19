@@ -99,7 +99,7 @@ export default function WatchDemoDialog({ trigger }) {
                 className="inline-flex items-center gap-2 border border-volt/40 text-volt hover:bg-volt/10 rounded-md px-3 py-2 text-xs font-medium transition-colors"
                 data-testid="walkthrough-try-upload"
               >
-                Try upload demo
+                Try a real upload
               </Link>
               <JoinBetaDialog
                 trigger={

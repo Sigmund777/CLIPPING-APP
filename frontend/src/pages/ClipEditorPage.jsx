@@ -3,9 +3,8 @@ import { useParams, Link, useNavigate } from "react-router-dom";
 import DashboardLayout from "../components/DashboardLayout";
 import api from "../lib/api";
 import {
-  DEMO_TRANSCRIPT, DEMO_SUGGESTIONS, getDemoClipById, getActiveClip,
-  setActiveClip, formatTimestamp, saveClip, CLIP_STATUSES, PLATFORM_OPTIONS,
-  CAPTION_STYLE_OPTIONS,
+  getActiveClip, setActiveClip, formatTimestamp, saveClip,
+  CLIP_STATUSES, PLATFORM_OPTIONS, CAPTION_STYLE_OPTIONS,
 } from "../lib/mockData";
 import { toast } from "sonner";
 import {
@@ -19,7 +18,7 @@ const CAPTION_STYLES = ["Bold-Yellow", "Subtitled", "Karaoke", "Minimal", "Big M
 function VerticalPreview({ caption, onTogglePlay, playing }) {
   return (
     <div className="aspect-[9/16] w-full max-w-[340px] mx-auto bg-ink-900 border border-white/10 rounded-xl relative overflow-hidden" data-testid="clip-preview">
-      <div className="absolute inset-0" style={{ background: "linear-gradient(135deg, #CCFF0022 0%, #18181B 40%, #09090B 100%)" }} />
+      <div className="absolute inset-0" style={{ background: "linear-gradient(135deg, #A855F722 0%, #18181B 40%, #09090B 100%)" }} />
       <div className="absolute inset-0 dot-grid opacity-30" />
       {/* Faux waveform */}
       <div className="absolute top-1/3 left-1/2 -translate-x-1/2 flex items-end gap-1 h-32">
@@ -86,46 +85,61 @@ export default function ClipEditorPage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      // Each call independently falls back to demo data so a partial backend failure never blanks the page.
-      const safeCall = async (fn, fallback) => {
-        try { return (await fn()).data; } catch (_) { return fallback; }
-      };
-      const [c, t, s] = await Promise.all([
-        safeCall(() => api.get(`/clips/${clipId}`, { timeout: 5000 }), getDemoClipById(clipId)),
-        safeCall(() => api.post("/ai/transcript", { clip_id: clipId }, { timeout: 5000 }), DEMO_TRANSCRIPT),
-        safeCall(() => api.post("/ai/suggestions", { clip_id: clipId }, { timeout: 5000 }), DEMO_SUGGESTIONS),
-      ]);
-      if (cancelled) return;
-      // If we have an active clip from the upload flow, seed editor state from it.
       const stashed = getActiveClip();
       const fromActive = (stashed && stashed.id === clipId) ? stashed : null;
-      const baseClip = c || getDemoClipById(clipId);
-      setClip(fromActive ? { ...baseClip, title: fromActive.title, duration_seconds: fromActive.duration_seconds || baseClip.duration_seconds } : baseClip);
-      setTranscript(t || DEMO_TRANSCRIPT);
-      // Prepend the active clip's title to the suggestions list so it's the default selected title.
-      const baseSugg = s || DEMO_SUGGESTIONS;
-      if (fromActive?.title) {
-        const filtered = (baseSugg.viral_titles || []).filter((t) => t !== fromActive.title);
-        setSuggestions({ ...baseSugg, viral_titles: [fromActive.title, ...filtered] });
-        setActiveTitle(0);
-      } else {
-        setSuggestions(baseSugg);
+
+      // Build the working clip object from activeClip (set by UploadPage).
+      // If the user navigated here directly, we'll still attempt to fetch the project.
+      let workingClip = fromActive || null;
+      let projectSuggestions = [];
+      let transcriptText = "";
+      let transcriptSegments = [];
+
+      if (fromActive?.project_id) {
+        try {
+          const { data: proj } = await api.get(`/projects/${fromActive.project_id}`, { timeout: 8000 });
+          if (proj) {
+            projectSuggestions = Array.isArray(proj.suggestions) ? proj.suggestions : [];
+            transcriptText = proj.transcript_text || "";
+            transcriptSegments = proj.transcript_segments || [];
+          }
+        } catch (_) { /* project fetch is best-effort */ }
       }
-      setCaptionStyle((fromActive?.caption_style) || (c && c.caption_style) || "Bold-Yellow");
+
+      if (cancelled) return;
+      if (!workingClip) {
+        setNoClipSelected(true);
+        return;
+      }
+
+      setClip(workingClip);
+      setTranscript({ text: transcriptText, segments: transcriptSegments });
+
+      // Build a "suggestions" object shape compatible with the existing UI.
+      // viral_titles  = the titles of the OTHER clip ideas from the same project
+      // clips         = the other clip ideas
+      // caption_styles = the 4 allowed styles
+      const otherClips = projectSuggestions.filter((c) => c.id !== workingClip.id);
+      const titles = [workingClip.title, ...otherClips.map((c) => c.title)].filter(Boolean);
+      setSuggestions({
+        viral_titles: titles,
+        clips: otherClips,
+        caption_styles: ["Clean", "Bold", "Meme", "Educational"],
+      });
+      setActiveTitle(0);
+      setCaptionStyle(workingClip.caption_style || "Bold");
     })();
     return () => { cancelled = true; };
   }, [clipId]);
 
   const regenerate = async () => {
-    toast("Regenerating viral titles…");
-    try {
-      const { data } = await api.post("/ai/suggestions", { clip_id: clipId }, { timeout: 5000 });
-      setSuggestions(data);
-    } catch (_) {
-      // Reshuffle demo titles client-side
-      const shuffled = [...DEMO_SUGGESTIONS.viral_titles].sort(() => Math.random() - 0.5);
-      setSuggestions({ ...DEMO_SUGGESTIONS, viral_titles: shuffled });
-    }
+    // Reshuffle the existing project's titles client-side. A real "regenerate"
+    // would re-call Claude — we'll add that when needed.
+    if (!suggestions?.viral_titles) return;
+    const shuffled = [...suggestions.viral_titles].sort(() => Math.random() - 0.5);
+    setSuggestions({ ...suggestions, viral_titles: shuffled });
+    setActiveTitle(0);
+    toast("Titles shuffled");
   };
 
   const exportClip = async () => { /* legacy stub — replaced by startRender */ };
@@ -257,15 +271,9 @@ export default function ClipEditorPage() {
             <ArrowLeft className="w-4 h-4" /> Back to studio
           </Link>
           <div className="flex items-center gap-3">
-            {activeClip?.mode === "real_ai" ? (
-              <div className="inline-flex items-center gap-1.5 bg-volt text-black rounded-full px-3 py-1 text-xs" data-testid="editor-badge-real">
-                <Zap className="w-3.5 h-3.5" /> <span className="font-bold uppercase tracking-[0.15em] text-[10px]">AI analysis complete</span>
-              </div>
-            ) : (
-              <div className="inline-flex items-center gap-1.5 bg-volt/10 border border-volt/30 rounded-full px-3 py-1 text-xs" data-testid="editor-badge-sample">
-                <Sparkles className="w-3.5 h-3.5 text-volt" /> <span className="text-volt font-medium">Sample results</span>
-              </div>
-            )}
+            <div className="inline-flex items-center gap-1.5 btn-brand rounded-full px-3 py-1 text-xs" data-testid="editor-badge-real">
+              <Zap className="w-3.5 h-3.5" /> <span className="font-bold uppercase tracking-[0.15em] text-[10px]">Real AI · Whisper + Claude</span>
+            </div>
             <button
               onClick={renderJob?.status === "ready" ? downloadRender : startRender}
               disabled={!canRender || rendering || (renderJob && !["ready", "failed"].includes(renderJob.status))}
@@ -306,7 +314,7 @@ export default function ClipEditorPage() {
                 </span>
               )}
               <span className="ml-auto inline-flex items-center gap-1.5 text-[10px] uppercase tracking-[0.18em] text-zinc-500 font-bold">
-                <Lightbulb className="w-3 h-3 text-volt" /> {activeClip.mode === "real_ai" ? "Live AI · Whisper + Claude" : "Sample data"}
+                <Lightbulb className="w-3 h-3 text-volt" /> Real AI · Whisper + Claude
               </span>
             </div>
 

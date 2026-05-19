@@ -203,7 +203,7 @@ export default function JoinBetaDialog({ trigger }) {
             <p className="mt-2 text-sm text-zinc-400">We'll email <span className="text-zinc-300">{email}</span> the moment access opens.</p>
             <p className="mt-3 text-[11px] text-zinc-600">Beta submissions are stored locally in this beta build.</p>
             <div className="mt-6 inline-flex items-center gap-2 border border-white/10 rounded-md px-4 py-2 text-xs text-zinc-400">
-              <Sparkles className="w-3 h-3 text-volt" /> Meanwhile, keep exploring demo mode.
+              <Sparkles className="w-3 h-3 text-volt" /> We'll review and get back within 48 hours.
             </div>
             <button
               onClick={() => setOpen(false)}
