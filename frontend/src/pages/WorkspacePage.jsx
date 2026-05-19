@@ -124,7 +124,7 @@ export default function WorkspacePage() {
                 </div>
                 {c.hook && <p className="text-xs text-zinc-300 leading-relaxed line-clamp-2 border-l-2 border-volt/30 pl-3">{c.hook}</p>}
                 <div className="text-[10px] text-zinc-500 flex items-center justify-between gap-2 mt-1">
-                  <span>{c.confidence ? <><Zap className="inline w-3 h-3 text-volt mr-1" />{c.confidence}% confident</> : <><Lightbulb className="inline w-3 h-3 mr-1" />Sample</>}</span>
+                  <span>{c.confidence ? <><Zap className="inline w-3 h-3 text-volt mr-1" />{c.confidence}% confident</> : <><Lightbulb className="inline w-3 h-3 mr-1" />New</>}</span>
                   <span>Saved {formatRelative(c.updated_at || c.saved_at)}</span>
                 </div>
 

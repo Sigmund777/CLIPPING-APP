@@ -5,7 +5,7 @@ import api, { formatApiErrorDetail } from "../lib/api";
 import { supabase, SOURCES_BUCKET } from "../lib/supabase";
 import { useAuth } from "../lib/auth";
 import {
-  DEMO_GENERATED_CLIPS, formatTimestamp,
+  formatTimestamp,
   getActiveTemplate, clearActiveTemplate, loadSettings, setActiveClip,
 } from "../lib/mockData";
 import {
@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-// Stage definitions — order matches the beta processing pipeline.
+// Stage definitions — order matches the real processing pipeline.
 const STAGES = [
   { id: "uploading",    label: "Uploading",            hint: "Securely streaming your file to your private storage bucket." },
   { id: "extracting",   label: "Extracting audio",     hint: "Pulling the audio track for transcription." },
@@ -176,27 +176,7 @@ export default function UploadPage() {
     requestAnimationFrame(step);
   });
 
-  // ----- Demo-mode stage progression (matches the real-AI sequence) -----
-  const startDemo = async (sampleName = "youtube-source.mp4") => {
-    setFile({ name: sampleName, size: 0 });
-    setResults(null);
-    setErrorMsg("");
-    setResultMode("demo");
-
-    setStage("uploading");
-    setProgress(0);
-    await animateProgressTo(100, 800);
-
-    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    setStage("extracting");   await wait(900);
-    setStage("transcribing"); await wait(1300);
-    setStage("finding");      await wait(1400);
-    setStage("hooks");        await wait(1200);
-    setStage("ready");
-
-    setResults(DEMO_GENERATED_CLIPS.slice(0, 3));
-    toast.success("Sample clip ideas ready", { description: "Demo data — connect a real file for AI analysis." });
-  };
+  // ----- Removed demo mode (legacy beta path) -----
 
   const { user } = useAuth();
 
@@ -268,12 +248,12 @@ export default function UploadPage() {
       await animateProgressTo(100, 400);
     } catch (err) {
       stageTimers.forEach(clearTimeout);
-      const detail = formatApiErrorDetail(err?.response?.data?.detail) || err?.message || "Live AI processing could not complete.";
+      const detail = formatApiErrorDetail(err?.response?.data?.detail) || err?.message || "AI processing failed.";
       setErrorMsg(detail);
-      setResultMode("demo");
+      setStage(null);
+      setResults(null);
+      setResultMode(null);
       toast.error("AI analysis failed", { description: detail });
-      setStage("ready");
-      setResults(DEMO_GENERATED_CLIPS.slice(0, 3));
       return;
     }
     stageTimers.forEach(clearTimeout);
@@ -281,11 +261,12 @@ export default function UploadPage() {
     const data = response?.data || {};
     const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
     if (suggestions.length < 1) {
-      setErrorMsg("AI returned no suggestions. Try a longer clip.");
-      setResultMode("demo");
-      setStage("ready");
-      setResults(DEMO_GENERATED_CLIPS.slice(0, 3));
-      toast.error("No usable suggestions", { description: "Showing sample ideas instead." });
+      const msg = "AI returned no clip suggestions. Try a longer or clearer recording.";
+      setErrorMsg(msg);
+      setStage(null);
+      setResults(null);
+      setResultMode(null);
+      toast.error("No usable suggestions", { description: msg });
       return;
     }
     setStage("ready");
@@ -300,12 +281,11 @@ export default function UploadPage() {
   };
 
   const start = async (selectedFile) => {
-    // If the file looks like a real file (has size > 0), run the real pipeline.
-    if (selectedFile && selectedFile.size && selectedFile.size > 0) {
-      await startRealAI(selectedFile);
-    } else {
-      await startDemo(selectedFile?.name);
+    if (!selectedFile || !selectedFile.size) {
+      toast.error("Please pick a valid video or audio file.");
+      return;
     }
+    await startRealAI(selectedFile);
   };
 
   const reset = () => {
@@ -349,20 +329,16 @@ export default function UploadPage() {
     <DashboardLayout>
       <div className="px-6 lg:px-10 py-10 max-w-5xl mx-auto" data-testid="upload-page">
 
-        {/* Header strip with beta + result mode badge */}
+        {/* Header strip with live AI status */}
         <div className="flex items-center gap-2 flex-wrap mb-3">
-          <span className="inline-flex items-center gap-1.5 border border-volt/30 bg-volt/5 rounded-full px-2.5 py-1">
+          <span className="inline-flex items-center gap-1.5 border border-purple/30 bg-purple/10 rounded-full px-2.5 py-1">
             <span className="w-1.5 h-1.5 rounded-full bg-volt animate-pulse-glow" />
-            <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-volt">Early access beta</span>
+            <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-purple-200">Real AI · Whisper + Claude 4.5</span>
           </span>
-          {resultMode === "real_ai" ? (
-            <span className="inline-flex items-center gap-1.5 bg-volt text-black rounded-full px-2.5 py-1" data-testid="badge-real-ai">
+          {resultMode === "real_ai" && (
+            <span className="inline-flex items-center gap-1.5 btn-brand rounded-full px-2.5 py-1" data-testid="badge-real-ai">
               <Zap className="w-3 h-3" />
               <span className="text-[10px] font-bold uppercase tracking-[0.18em]">AI analysis complete</span>
-            </span>
-          ) : (
-            <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-zinc-500" data-testid="badge-demo-mode">
-              {resultMode === "demo" ? "Demo mode · sample data" : "Real AI · Whisper + Claude 4.5"}
             </span>
           )}
         </div>
@@ -411,16 +387,9 @@ export default function UploadPage() {
               </div>
             </label>
 
-            <div className="mt-6 flex items-center gap-2 bg-ink-900 border border-white/5 rounded-md p-3">
+            <div className="mt-6 flex items-center gap-2 bg-ink-900 border border-white/5 rounded-md p-3 text-xs text-zinc-500">
               <Sparkles className="w-4 h-4 text-volt shrink-0" />
-              <input type="text" placeholder="…or paste a YouTube / Vimeo / Twitch URL" className="flex-1 bg-transparent text-sm focus:outline-none" data-testid="upload-url" />
-              <button
-                onClick={() => startDemo("youtube-source.mp4")}
-                className="bg-white/5 hover:bg-white/10 px-3 py-1.5 rounded-md text-xs"
-                data-testid="upload-ingest"
-              >
-                Try with sample source
-              </button>
+              Uploads go directly to your private Supabase bucket. Whisper transcribes, Claude Sonnet 4.5 writes the clip ideas, and FFmpeg renders a 9:16 MP4 — all real, no demo data.
             </div>
           </>
         )}
@@ -453,32 +422,37 @@ export default function UploadPage() {
           </div>
         )}
 
+        {/* ------- Error (real-AI failure) ------- */}
+        {errorMsg && !stage && (
+          <div className="mt-8 flex items-start gap-3 bg-red-500/5 border border-red-500/30 text-zinc-200 rounded-md p-4 text-sm" data-testid="upload-error">
+            <AlertCircle className="w-5 h-5 mt-0.5 shrink-0 text-red-400" />
+            <div className="flex-1 min-w-0">
+              <div className="font-medium text-white">AI analysis failed</div>
+              <div className="text-xs mt-1 text-zinc-400 break-words">{errorMsg}</div>
+              <div className="text-xs mt-2 text-zinc-500">
+                If this keeps happening: check that your file has clear audio, is under 100 MB, and your backend has a valid <code>EMERGENT_LLM_KEY</code> with quota.
+              </div>
+              <button
+                onClick={() => { setErrorMsg(""); inputRef.current?.click(); }}
+                className="mt-3 inline-flex items-center gap-2 btn-brand font-medium px-3 py-1.5 rounded-md text-xs"
+                data-testid="upload-retry"
+              >
+                <RotateCcw className="w-3 h-3" /> Try another file
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* ------- Results ------- */}
         {stage === "ready" && results && (
           <div data-testid="upload-results">
-            {errorMsg && (
-              <div className="mb-6 flex items-start gap-3 bg-volt/5 border border-volt/20 text-zinc-200 rounded-md p-4 text-sm" data-testid="upload-error">
-                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-volt" />
-                <div>
-                  <div className="font-medium text-white">Live AI processing is not connected in this beta build yet.</div>
-                  <div className="text-xs mt-1 text-zinc-400">Showing sample clip ideas for now — you can still explore the editor, save clips, and request real access.</div>
-                </div>
-              </div>
-            )}
-
             <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-2">
               <div>
                 <h1 className="font-heading text-3xl sm:text-4xl font-medium tracking-tight">
-                  {resultMode === "real_ai" ? (
-                    <>Here are <span className="text-volt">{results.length} real clip ideas</span> from your transcript.</>
-                  ) : (
-                    <>Here are <span className="text-volt">{results.length} sample clip ideas</span>.</>
-                  )}
+                  Here are <span className="text-volt">{results.length} real clip ideas</span> from your transcript.
                 </h1>
                 <p className="mt-2 text-sm text-zinc-400">
-                  {resultMode === "real_ai"
-                    ? "Generated by Whisper + Claude Sonnet 4.5. Pick one to open in the editor — full export pipeline is coming soon."
-                    : "Demo data shown so you can explore the studio. Upload a real audio/video file for live AI analysis."}
+                  Generated by Whisper + Claude Sonnet 4.5. Pick one to open in the editor and render the 9:16 MP4.
                 </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -494,7 +468,7 @@ export default function UploadPage() {
                 <div className="text-sm font-medium mt-1 truncate">{file?.name || "video.mp4"}</div>
               </div>
               <div className="bg-ink-900 p-4">
-                <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 font-bold">{resultMode === "real_ai" ? "AI ideas" : "Sample ideas"}</div>
+                <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 font-bold">AI ideas</div>
                 <div className="text-sm font-medium mt-1 text-volt">{results.length}</div>
               </div>
               <div className="bg-ink-900 p-4">
@@ -503,9 +477,7 @@ export default function UploadPage() {
               </div>
               <div className="bg-ink-900 p-4">
                 <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 font-bold">Mode</div>
-                <div className={`text-sm font-medium mt-1 ${resultMode === "real_ai" ? "text-volt" : ""}`}>
-                  {resultMode === "real_ai" ? "Real AI · Whisper + Claude" : "Demo processing"}
-                </div>
+                <div className="text-sm font-medium mt-1 text-volt">Real AI · Whisper + Claude</div>
               </div>
             </div>
 

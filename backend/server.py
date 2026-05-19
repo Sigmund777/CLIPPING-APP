@@ -239,6 +239,14 @@ async def ai_analyze(payload: AnalyzeIn, user: dict = Depends(get_current_user))
         )
     except Exception as e:
         logger.error(f"Whisper failed: {e}")
+        emsg = str(e).lower()
+        if "budget" in emsg and "exceed" in emsg:
+            raise HTTPException(status_code=402, detail=(
+                "AI key budget exceeded. The Emergent LLM key on the backend is out of credit. "
+                "Top up at Emergent → Profile → Universal Key → Add Balance, or set your own EMERGENT_LLM_KEY in backend/.env."
+            ))
+        if "rate" in emsg and "limit" in emsg:
+            raise HTTPException(status_code=429, detail="OpenAI is rate-limiting transcription right now. Wait 30 seconds and try again.")
         raise HTTPException(status_code=502, detail=f"Transcription failed: {str(e)[:200]}")
 
     raw_segments = getattr(transcript, "segments", None) or []
@@ -282,6 +290,11 @@ async def ai_analyze(payload: AnalyzeIn, user: dict = Depends(get_current_user))
         response_text = await chat.send_message(UserMessage(text=user_prompt))
     except Exception as e:
         logger.error(f"Claude failed: {e}")
+        emsg = str(e).lower()
+        if "budget" in emsg and "exceed" in emsg:
+            raise HTTPException(status_code=402, detail=(
+                "AI key budget exceeded mid-analysis. Top up the Emergent LLM key and retry."
+            ))
         raise HTTPException(status_code=502, detail=f"AI analysis failed: {str(e)[:200]}")
 
     try:
